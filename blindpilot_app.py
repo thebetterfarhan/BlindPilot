@@ -532,18 +532,9 @@ def about_description() -> str:
 #
 # Both official native installers are documented at code.claude.com/docs/en/setup.
 # Neither needs administrator rights or Node.js: they drop a real binary in
-# ~/.local/bin and self-update from then on.
+# ~/.local/bin and self-update from then on. The addresses themselves live in
+# `installers`, which is the module that runs them.
 # ---------------------------------------------------------------------------
-
-WINDOWS_INSTALL_PS1_URL = "https://claude.ai/install.ps1"
-POSIX_INSTALL_SH_URL = "https://claude.ai/install.sh"
-
-# Hermes ships per-platform script installers of the same shape — a PowerShell
-# one-liner on native Windows, curl through bash on macOS, Linux and WSL2 —
-# and is not on npm. It drops a launcher under the user's home directory and
-# self-updates from then on; no administrator rights, no Node.js.
-HERMES_INSTALL_PS1_URL = "https://hermes-agent.nousresearch.com/install.ps1"
-HERMES_INSTALL_SH_URL = "https://hermes-agent.nousresearch.com/install.sh"
 
 
 def _open_web_page(url: str) -> bool:
@@ -11814,9 +11805,9 @@ class SetupWizard(wx.Dialog):
         else:
             # No PowerShell, or no curl. Nothing to drive an install with.
             command = (
-                f"irm {WINDOWS_INSTALL_PS1_URL} | iex"
+                f"irm {installers.WINDOWS_INSTALL_PS1_URL} | iex"
                 if windows
-                else f"curl -fsSL {POSIX_INSTALL_SH_URL} | bash"
+                else f"curl -fsSL {installers.POSIX_INSTALL_SH_URL} | bash"
             )
             self._cli_status.SetLabel("Claude Code CLI was not found on this computer.")
             self._cli_detail.SetLabel(
