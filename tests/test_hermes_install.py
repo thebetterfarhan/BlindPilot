@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import blindpilot_app as app
+import install_path
 from agent_backends import BACKEND_HERMES
 
 
@@ -28,13 +29,17 @@ class _Patch:
 
     def __enter__(self):
         for name, value in self._patches.items():
-            self._saved.append((name, getattr(app, name)))
-            setattr(app, name, value)
+            owners = [module for module in (app, install_path) if name in vars(module)]
+            if not owners:
+                raise AttributeError(name)
+            for module in owners:
+                self._saved.append((module, name, getattr(module, name)))
+                setattr(module, name, value)
         return self
 
     def __exit__(self, *_exc):
-        for name, value in reversed(self._saved):
-            setattr(app, name, value)
+        for module, name, value in reversed(self._saved):
+            setattr(module, name, value)
         return False
 
 
@@ -170,7 +175,7 @@ def _clean_windows(monkeypatch, tmp_path):
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
     # The registry lives only on real Windows; this fake must not import it
     # when the suite runs on the macOS/Linux CI lanes.
-    monkeypatch.setattr(app, "ensure_on_windows_path", lambda _directory: True)
+    monkeypatch.setattr(install_path, "ensure_on_windows_path", lambda _directory: True)
     monkeypatch.delenv(app.UV_PYTHON_DIR_ENV, raising=False)
     monkeypatch.delenv("OneDrive", raising=False)
     monkeypatch.delenv("OneDriveConsumer", raising=False)

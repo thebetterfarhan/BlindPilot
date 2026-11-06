@@ -14,6 +14,7 @@ import blindpilot_app
 import claude_session
 import claude_worker
 import earcons
+import install_path
 import process_utils
 import question_dialog
 import questions
@@ -106,3 +107,33 @@ def test_the_sound_cues_live_in_earcons():
     assert not hasattr(blindpilot_app, "_faster_wav")
     assert blindpilot_app.CUE_PERIODIC is earcons.CUE_PERIODIC
     assert blindpilot_app._valid_progress_cue is earcons._valid_progress_cue
+
+
+def test_the_path_helpers_live_in_install_path():
+    """The window registers a folder on PATH; it does not implement the rules.
+
+    ``blindpilot_app`` reaches them as ``install_path.ensure_on_path``, so the
+    names are not attributes of the window module: nothing can keep reaching
+    them there by accident, and the move cannot be half-done.
+    """
+    for name in (
+        "_same_dir",
+        "_bundle_dir",
+        "path_without_bundle_entries",
+        "keep_bundle_off_child_path",
+        "_windows_persistent_path_dirs",
+        "_posix_persistent_path_dirs",
+        "_is_on_persistent_path",
+        "_broadcast_environment_change",
+        "_add_to_process_path",
+        "_path_with_entry",
+        "_shell_profile_file",
+        "_path_export_line",
+        "ensure_on_posix_path",
+        "ensure_on_path",
+        "ensure_on_windows_path",
+    ):
+        assert getattr(install_path, name).__module__ == "install_path", name
+        assert not hasattr(blindpilot_app, name), name
+    assert install_path.PATH_STANZA_MARKER == "# Added by BlindPilot"
+    assert not hasattr(blindpilot_app, "PATH_STANZA_MARKER")

@@ -27,42 +27,54 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
+import install_path  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_FREEBUFF,
-    PATH_STANZA_MARKER,
     _first_login_url,
     _install_argv,
-    _is_on_persistent_path,
     _node_archive_spec,
+    install_backend,
+    install_claude,
+)
+from claude_session import _fallback_claude_paths, _native_bin_dir  # noqa: E402
+from install_path import (  # noqa: E402
+    PATH_STANZA_MARKER,
+    _is_on_persistent_path,
     _path_export_line,
     _path_with_entry,
     _same_dir,
     _shell_profile_file,
     ensure_on_posix_path,
-    install_backend,
-    install_claude,
 )
-from claude_session import _fallback_claude_paths, _native_bin_dir  # noqa: E402
 
 WINDOWS = platform.system() == "Windows"
 
 
 class _Patch:
-    """Swap module attributes for the duration of a with-block."""
+    """Swap module attributes for the duration of a with-block.
+
+    The PATH helpers live in ``install_path``, and the window reaches them as
+    ``install_path.<name>``, so a patch has to land on the module that reads
+    the name. ``platform`` is read by both, so a patch on it lands on both.
+    """
 
     def __init__(self, **kwargs):
         self._new = kwargs
-        self._old = {}
+        self._old = []
 
     def __enter__(self):
         for name, value in self._new.items():
-            self._old[name] = getattr(blindpilot_app, name)
-            setattr(blindpilot_app, name, value)
+            owners = [module for module in (blindpilot_app, install_path) if name in vars(module)]
+            if not owners:
+                raise AttributeError(name)
+            for module in owners:
+                self._old.append((module, name, getattr(module, name)))
+                setattr(module, name, value)
         return self
 
     def __exit__(self, *exc):
-        for name, value in self._old.items():
-            setattr(blindpilot_app, name, value)
+        for module, name, value in reversed(self._old):
+            setattr(module, name, value)
         return False
 
 
@@ -283,7 +295,7 @@ def test_login_shell_path_split_keeps_entries_containing_spaces():
 
     with _PatchRun(run):
         with _Patch(platform=_FakePlatform("Darwin"), _login_shell=lambda: shell):
-            dirs = blindpilot_app._posix_persistent_path_dirs()
+            dirs = install_path._posix_persistent_path_dirs()
 
     assert spaced in dirs, dirs
     assert not any(d == "/opt/Some" for d in dirs)
