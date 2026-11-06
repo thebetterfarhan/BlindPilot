@@ -2,12 +2,16 @@
 
 Question types and parsing live in ``questions``, the question dialog in
 ``question_dialog``, shared process helpers in ``process_utils``, the Claude
-turn worker in ``claude_worker``, and the sound cues in ``earcons``. The old
-modules import what they still use from there; they do not keep compatibility
-re-exports of the moved symbols.
+turn worker in ``claude_worker``, the sound cues in ``earcons``, the PATH rules
+in ``install_path`` and the portable Node / npm machinery in ``portable_node``.
+The old modules import what they still use from there; they do not keep
+compatibility re-exports of the moved symbols.
 """
 
 from __future__ import annotations
+
+import ast
+from pathlib import Path
 
 import agent_backends
 import blindpilot_app
@@ -15,6 +19,7 @@ import claude_session
 import claude_worker
 import earcons
 import install_path
+import portable_node
 import process_utils
 import question_dialog
 import questions
@@ -137,3 +142,61 @@ def test_the_path_helpers_live_in_install_path():
         assert not hasattr(blindpilot_app, name), name
     assert install_path.PATH_STANZA_MARKER == "# Added by BlindPilot"
     assert not hasattr(blindpilot_app, "PATH_STANZA_MARKER")
+
+
+def test_the_portable_node_helpers_live_in_portable_node():
+    """The window calls the Node/npm installer; it does not implement it.
+
+    ``blindpilot_app`` reaches them as ``portable_node.install_portable_node``
+    and the like, so the names are not attributes of the window module:
+    nothing can keep reaching them there by accident, and the move cannot be
+    half-done. The npm command lines, the download and the logged process
+    runner all moved, so a clean-machine install runs the same code wherever it
+    is called from.
+    """
+    for name in (
+        "_backend_installs_with_npm",
+        "_managed_npm_prefix",
+        "_managed_npm_bin_dir",
+        "_node_runtime_root",
+        "_node_archive_spec",
+        "_managed_node_dir",
+        "_managed_npm",
+        "activate_managed_cli_paths",
+        "_find_npm",
+        "_automatic_npm_install_available",
+        "_fetch_url_bytes",
+        "_safe_extract_node_archive",
+        "install_portable_node",
+        "_npm_environment",
+        "_npm_install_argv",
+        "_npm_update_argv",
+        "_managed_backend_binary",
+        "_run_logged_process",
+    ):
+        assert getattr(portable_node, name).__module__ == "portable_node", name
+        assert not hasattr(blindpilot_app, name), name
+    # `_install_npm_backend` stays behind: it drops the window's Codex and
+    # OpenCode processes, which go with the dispatch rather than with npm.
+    assert hasattr(blindpilot_app, "_install_npm_backend")
+    assert not hasattr(portable_node, "_install_npm_backend")
+
+
+def test_portable_node_never_imports_the_window_module():
+    """The dependency runs one way: the window imports the installer.
+
+    The installer keeps whatever it needs from the window in the modules the
+    window already imports from, so importing it can never load wxPython or
+    pull the window in behind it.
+    """
+    source = (Path(__file__).resolve().parent.parent / "portable_node.py").read_text(
+        encoding="utf-8"
+    )
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "blindpilot_app" not in imported
+    assert "wx" not in imported

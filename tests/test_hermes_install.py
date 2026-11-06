@@ -17,6 +17,7 @@ from pathlib import Path
 
 import blindpilot_app as app
 import install_path
+import portable_node
 from agent_backends import BACKEND_HERMES
 
 
@@ -29,7 +30,9 @@ class _Patch:
 
     def __enter__(self):
         for name, value in self._patches.items():
-            owners = [module for module in (app, install_path) if name in vars(module)]
+            owners = [
+                module for module in (app, install_path, portable_node) if name in vars(module)
+            ]
             if not owners:
                 raise AttributeError(name)
             for module in owners:

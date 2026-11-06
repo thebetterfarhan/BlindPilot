@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import blindpilot_app as app
+import portable_node
 from agent_backends import (
     BACKEND_CODEX,
     BACKEND_COMMANDCODE,
@@ -121,7 +122,7 @@ def test_an_npm_backend_without_node_promises_node_not_npm(monkeypatch, wx_app):
     """Regression pin for an npm backend on a clean machine: the guidance is
     about Node.js, and the npm lie never appears anywhere."""
     wizard = _Wizard(BACKEND_CODEX)
-    monkeypatch.setattr(app, "_find_npm", lambda: None)
+    monkeypatch.setattr(portable_node, "_find_npm", lambda: None)
 
     app.SetupWizard._check_npm_backend_cli(wizard)
 
@@ -134,7 +135,7 @@ def test_hermes_is_offered_an_install_of_its_own(monkeypatch, wx_app):
     """Hermes installs through its official installer now, so the wizard
     offers it — with Hermes' instructions, not npm's."""
     wizard = _Wizard(BACKEND_HERMES)
-    monkeypatch.setattr(app, "_find_npm", lambda: "C:/npm/npm.cmd")
+    monkeypatch.setattr(portable_node, "_find_npm", lambda: "C:/npm/npm.cmd")
     monkeypatch.setattr(app, "_hermes_install_argv", lambda: ["powershell.exe", "-Command", "x"])
 
     app.SetupWizard._check_npm_backend_cli(wizard)
@@ -150,7 +151,7 @@ def test_hermes_without_prerequisites_still_gets_its_own_guidance(monkeypatch, w
     """No PowerShell (or no curl): the message names what is missing and the
     manual instructions, never npm."""
     wizard = _Wizard(BACKEND_HERMES)
-    monkeypatch.setattr(app, "_find_npm", lambda: "C:/npm/npm.cmd")
+    monkeypatch.setattr(portable_node, "_find_npm", lambda: "C:/npm/npm.cmd")
     monkeypatch.setattr(app, "_hermes_install_argv", lambda: None)
 
     app.SetupWizard._check_npm_backend_cli(wizard)

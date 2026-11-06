@@ -30,7 +30,6 @@ terminal sessions in different project folders.
 from __future__ import annotations
 
 import bisect
-import hashlib
 import importlib.util
 import json
 import logging
@@ -43,7 +42,6 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 import sys
-import tarfile
 import tempfile
 import threading
 import time
@@ -53,7 +51,6 @@ import urllib.request
 import uuid
 import weakref
 import webbrowser
-import zipfile
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -73,6 +70,7 @@ import claude_worker
 import diagnostics
 import earcons
 import install_path
+import portable_node
 from earcons import (
     CUE_LOOP,
     CUE_OFF,
@@ -84,7 +82,6 @@ from earcons import (
 )
 from dialog_tasks import TaskSlot
 from question_dialog import QuestionDialog
-from certificates import open_url
 from conversation_list import make_conversation_list
 from conversation_items import ConversationItem, ConversationItemsDialog, collect_items
 import remote_sessions
@@ -907,7 +904,7 @@ def install_hermes(log: Callable[[str], None]) -> Optional[str]:
         heard.append(line)
         log(line)
 
-    rc = _run_logged_process(argv, logged, env=_hermes_installer_env(log))
+    rc = portable_node._run_logged_process(argv, logged, env=_hermes_installer_env(log))
     if rc is None:
         return None
 
@@ -961,7 +958,7 @@ def install_antigravity(log: Callable[[str], None]) -> Optional[str]:
     log(
         "Downloading and running the official Antigravity CLI installer. This usually takes under a minute."
     )
-    rc = _run_logged_process(argv, log)
+    rc = portable_node._run_logged_process(argv, log)
     if rc is None:
         return None
     binary = find_backend_cli(BACKEND_ANTIGRAVITY)
@@ -1032,7 +1029,7 @@ def install_muse(log: Callable[[str], None]) -> Optional[str]:
         "Downloading and running the official Muse Code installer. "
         "This usually takes under a minute."
     )
-    rc = _run_logged_process(argv, log)
+    rc = portable_node._run_logged_process(argv, log)
     if rc is None:
         return None
 
@@ -1065,7 +1062,7 @@ def install_claude(log: Callable[[str], None]) -> Optional[str]:
         return None
 
     log("Downloading and running the Claude Code installer. This usually takes under a minute.")
-    rc = _run_logged_process(argv, log)
+    rc = portable_node._run_logged_process(argv, log)
     if rc is None:
         return None
 
@@ -1108,303 +1105,6 @@ _QUEUEING_BACKENDS = frozenset(
 )
 
 
-def _backend_installs_with_npm(backend: str) -> bool:
-    """Whether this backend is one BlindPilot can install for the user.
-
-    Not every backend ships on npm: Hermes installs itself from its own
-    installer, so telling the user that npm is required would send them after
-    the wrong thing entirely.
-    """
-    return bool(BACKENDS[normalize_backend(backend)].npm_package)
-
-
-NODE_RELEASE_INDEX_URL = "https://nodejs.org/dist/index.json"
-NODE_RELEASE_BASE_URL = "https://nodejs.org/dist"
-_NODE_MINIMUM_MAJOR = 18
-
-
-def _managed_npm_prefix() -> Path:
-    """A writable per-user prefix owned by BlindPilot, never a system folder."""
-    return blindpilot_data_dir() / "npm"
-
-
-def _managed_npm_bin_dir() -> Path:
-    prefix = _managed_npm_prefix()
-    return prefix if platform.system() == "Windows" else prefix / "bin"
-
-
-def _node_runtime_root() -> Path:
-    return blindpilot_data_dir() / "runtimes" / "node"
-
-
-def _node_archive_spec(
-    version: str, system: Optional[str] = None, machine: Optional[str] = None
-) -> Optional[tuple[str, str]]:
-    """Return the official Node archive name and its extracted folder."""
-    system = system or platform.system()
-    machine = (machine or platform.machine()).casefold()
-    os_name = {"Windows": "win", "Darwin": "darwin", "Linux": "linux"}.get(system)
-    arch = {
-        "amd64": "x64",
-        "x86_64": "x64",
-        "arm64": "arm64",
-        "aarch64": "arm64",
-    }.get(machine)
-    if not os_name or not arch:
-        return None
-    stem = f"node-{version}-{os_name}-{arch}"
-    extension = ".zip" if system == "Windows" else ".tar.gz"
-    return stem + extension, stem
-
-
-def _managed_node_dir() -> Optional[Path]:
-    """Newest complete portable Node runtime previously installed by BlindPilot."""
-    spec = _node_archive_spec("v0.0.0")
-    if spec is None:
-        return None
-    marker = "-".join(spec[1].split("-")[-2:])
-    executable = "node.exe" if platform.system() == "Windows" else "bin/node"
-    npm = "npm.cmd" if platform.system() == "Windows" else "bin/npm"
-    candidates: list[tuple[tuple[int, ...], Path]] = []
-    try:
-        folders = _node_runtime_root().glob(f"node-v*-{marker}")
-        for folder in folders:
-            match = re.match(r"node-v(\d+(?:\.\d+)+)-", folder.name)
-            if match and (folder / executable).is_file() and (folder / npm).is_file():
-                candidates.append((tuple(int(part) for part in match.group(1).split(".")), folder))
-    except OSError:
-        return None
-    return max(candidates, default=((), None), key=lambda item: item[0])[1]
-
-
-def _managed_npm() -> Optional[str]:
-    runtime = _managed_node_dir()
-    if runtime is None:
-        return None
-    relative = "npm.cmd" if platform.system() == "Windows" else "bin/npm"
-    return str(runtime / relative)
-
-
-def activate_managed_cli_paths() -> None:
-    """Make BlindPilot-managed Node and backend launchers usable this run."""
-    runtime = _managed_node_dir()
-    if runtime is not None:
-        install_path._add_to_process_path(
-            runtime if platform.system() == "Windows" else runtime / "bin"
-        )
-    managed_bin = _managed_npm_bin_dir()
-    if managed_bin.is_dir():
-        install_path._add_to_process_path(managed_bin)
-
-
-def _find_npm() -> Optional[str]:
-    return shutil.which("npm") or _managed_npm()
-
-
-def _automatic_npm_install_available() -> bool:
-    return _find_npm() is not None or _node_archive_spec("v0.0.0") is not None
-
-
-def _fetch_url_bytes(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": f"BlindPilot/{APP_VERSION}"})
-    with open_url(request, timeout=30) as response:
-        return response.read()
-
-
-def _safe_extract_node_archive(archive_path: Path, destination: Path) -> None:
-    """Extract one verified Node archive without permitting path traversal."""
-    destination.mkdir(parents=True, exist_ok=True)
-    root = destination.resolve()
-    if archive_path.suffix.casefold() == ".zip":
-        with zipfile.ZipFile(archive_path) as archive:
-            for member in archive.infolist():
-                target = (destination / member.filename).resolve()
-                if os.path.commonpath((str(root), str(target))) != str(root):
-                    raise OSError("The Node.js archive contains an unsafe path.")
-            archive.extractall(destination)
-        return
-    with tarfile.open(archive_path, mode="r:gz") as archive:
-        archive.extractall(destination, filter="data")
-
-
-def install_portable_node(log: Callable[[str], None]) -> Optional[str]:
-    """Install the latest Node LTS and npm for this user, with no elevation."""
-    existing = _managed_npm()
-    if existing:
-        node_bin = Path(existing).parent
-        try:
-            changed = install_path.ensure_on_path(node_bin)
-            if changed:
-                log(f"Added {node_bin} to {changed}.")
-        except OSError as exc:
-            log(f"Node.js is installed, but adding it to PATH failed: {exc}")
-        return existing
-    if _node_archive_spec("v0.0.0") is None:
-        log(
-            f"Automatic Node.js installation is not available for "
-            f"{platform.system()} {platform.machine()}."
-        )
-        return None
-
-    log("Node.js and npm were not found. Installing the latest Node.js LTS for this user.")
-    try:
-        releases = json.loads(_fetch_url_bytes(NODE_RELEASE_INDEX_URL).decode("utf-8"))
-        release = next(
-            item
-            for item in releases
-            if isinstance(item, dict)
-            and item.get("lts")
-            and isinstance(item.get("version"), str)
-            and int(item["version"].lstrip("v").split(".", 1)[0]) >= _NODE_MINIMUM_MAJOR
-        )
-        version = release["version"]
-        archive_name, extracted_name = _node_archive_spec(version) or ("", "")
-        if not archive_name:
-            raise OSError("No official Node.js archive is available for this computer.")
-        release_url = f"{NODE_RELEASE_BASE_URL}/{version}"
-        checksums = _fetch_url_bytes(f"{release_url}/SHASUMS256.txt").decode("utf-8")
-        checksum = next(
-            line.split()[0] for line in checksums.splitlines() if line.split()[1:] == [archive_name]
-        )
-    except (OSError, ValueError, StopIteration, urllib.error.URLError) as exc:
-        log(f"Could not discover the current Node.js LTS release: {exc}")
-        return None
-
-    runtime_root = _node_runtime_root()
-    destination = runtime_root / extracted_name
-    if destination.is_dir():
-        npm = destination / ("npm.cmd" if platform.system() == "Windows" else "bin/npm")
-        return str(npm) if npm.is_file() else None
-
-    try:
-        runtime_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="install-", dir=runtime_root) as temporary:
-            temporary_path = Path(temporary)
-            archive_path = temporary_path / archive_name
-            log(f"Downloading Node.js {version} from nodejs.org...")
-            request = urllib.request.Request(
-                f"{release_url}/{archive_name}",
-                headers={"User-Agent": f"BlindPilot/{APP_VERSION}"},
-            )
-            digest = hashlib.sha256()
-            with (
-                open_url(request, timeout=60) as response,
-                open(archive_path, "wb") as output,
-            ):
-                while chunk := response.read(1024 * 1024):
-                    output.write(chunk)
-                    digest.update(chunk)
-            if digest.hexdigest().casefold() != checksum.casefold():
-                raise OSError("The downloaded Node.js archive failed SHA-256 verification.")
-            extract_root = temporary_path / "extracted"
-            _safe_extract_node_archive(archive_path, extract_root)
-            extracted = extract_root / extracted_name
-            if not extracted.is_dir():
-                raise OSError("The Node.js archive did not contain its expected folder.")
-            try:
-                os.replace(extracted, destination)
-            except FileExistsError:
-                pass  # Another install thread completed the same release first.
-    except (OSError, tarfile.TarError, zipfile.BadZipFile, urllib.error.URLError) as exc:
-        log(f"Node.js installation failed: {exc}")
-        return None
-
-    npm_path = destination / ("npm.cmd" if platform.system() == "Windows" else "bin/npm")
-    node_bin = destination if platform.system() == "Windows" else destination / "bin"
-    if not npm_path.is_file():
-        log("Node.js was extracted, but npm was missing from the installed runtime.")
-        return None
-    try:
-        changed = install_path.ensure_on_path(node_bin)
-        if changed:
-            log(f"Added {node_bin} to {changed}.")
-    except OSError as exc:
-        log(f"Node.js was installed, but adding it to PATH failed: {exc}")
-    log(f"Installed Node.js and npm: {npm_path}")
-    return str(npm_path)
-
-
-def _npm_environment(npm: str) -> dict[str, str]:
-    """npm's own directory first, then everything a terminal would have.
-
-    npm is itself a shim that has to find `node`, so it fails from the macOS
-    Dock for exactly the reason the provider CLIs do.
-    """
-    env = subprocess_env(npm)
-    env.update(
-        {
-            "CI": "1",
-            "npm_config_yes": "true",
-            "npm_config_progress": "false",
-            "npm_config_fund": "false",
-            "npm_config_audit": "false",
-        }
-    )
-    return env
-
-
-def _npm_install_argv(backend: str, latest: bool = False) -> Optional[List[str]]:
-    """The npm command that installs a backend, or None if npm is unavailable.
-
-    `latest` pins the package's latest tag, which is what an update wants.
-    """
-    package = BACKENDS[normalize_backend(backend)].npm_package
-    npm = _find_npm()
-    if not package or not npm:
-        return None
-    return [
-        npm,
-        "install",
-        "--global",
-        "--prefix",
-        str(_managed_npm_prefix()),
-        f"{package}@latest" if latest else package,
-    ]
-
-
-def _npm_update_argv(backend: str) -> Optional[List[str]]:
-    return _npm_install_argv(backend, latest=True)
-
-
-def _managed_backend_binary(backend: str) -> Optional[str]:
-    executable = BACKENDS[normalize_backend(backend)].executable
-    suffixes = (".exe", ".cmd", ".ps1", "") if platform.system() == "Windows" else ("",)
-    return next(
-        (
-            str(candidate)
-            for suffix in suffixes
-            if (candidate := _managed_npm_bin_dir() / f"{executable}{suffix}").is_file()
-        ),
-        None,
-    )
-
-
-def _run_logged_process(
-    argv: List[str], log: Callable[[str], None], env: Optional[dict[str, str]] = None
-) -> Optional[int]:
-    try:
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env if env is not None else subprocess_env(argv[0]),
-            **no_window_kwargs(),
-        )
-    except OSError as exc:
-        log(f"The installer could not be started: {exc}")
-        return None
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip()
-        if line:
-            log(line)
-    return proc.wait()
-
-
 def _install_failure_message(backend: str) -> str:
     """What to hear when an install did not complete: the command, unspliced."""
     info = BACKENDS[normalize_backend(backend)]
@@ -1427,7 +1127,7 @@ def _install_uv(log: Callable[[str], None]) -> bool:
     if argv is None:
         return False
     log("Installing uv, the tool manager muse-cli is installed with...")
-    if _run_logged_process(argv, log) is None:
+    if portable_node._run_logged_process(argv, log) is None:
         return False
     return find_uv() is not None
 
@@ -1452,7 +1152,7 @@ def install_museai(log: Callable[[str], None], upgrade: bool = False) -> Optiona
         log(MUSEAI_MISSING_PREREQ)
         return None
     log(f"{'Updating' if upgrade else 'Installing'} {label}'s command line, muse-cli...")
-    rc = _run_logged_process(argv, log)
+    rc = portable_node._run_logged_process(argv, log)
     binary = find_backend_cli(BACKEND_MUSEAI)
     if binary is None:
         log(f"muse-cli was not found afterwards (exit code {rc}).")
@@ -1472,13 +1172,13 @@ Installer = Callable[[Callable[[str], None]], Optional[str]]
 def _install_npm_backend(backend: str, log: Callable[[str], None]) -> Optional[str]:
     """Install the backend's npm package and verify its launcher starts."""
     label = backend_label(backend)
-    npm = _find_npm()
+    npm = portable_node._find_npm()
     if npm is None:
-        npm = install_portable_node(log)
+        npm = portable_node.install_portable_node(log)
     if npm is None:
         log(f"npm could not be installed, so BlindPilot cannot install {label} automatically.")
         return None
-    argv = _npm_install_argv(backend)
+    argv = portable_node._npm_install_argv(backend)
     if argv is None:
         log(f"npm could not be installed, so BlindPilot cannot install {label} automatically.")
         return None
@@ -1488,11 +1188,11 @@ def _install_npm_backend(backend: str, log: Callable[[str], None]) -> Optional[s
         # Same reason as an update: npm cannot replace a running executable.
         stop_opencode_server()
     log(f"Installing {label} with npm. This can take a minute.")
-    rc = _run_logged_process(argv, log, env=_npm_environment(npm))
+    rc = portable_node._run_logged_process(argv, log, env=portable_node._npm_environment(npm))
     if rc is None:
         return None
-    install_path._add_to_process_path(_managed_npm_bin_dir())
-    binary = _managed_backend_binary(backend) or find_backend_cli(backend)
+    install_path._add_to_process_path(portable_node._managed_npm_bin_dir())
+    binary = portable_node._managed_backend_binary(backend) or find_backend_cli(backend)
     if binary is None:
         log(f"npm finished with exit code {rc}, but {label} was not found afterwards.")
         return None
@@ -1507,7 +1207,9 @@ def _install_npm_backend(backend: str, log: Callable[[str], None]) -> Optional[s
     # version both verifies it can start and makes Freebuff download and verify
     # the native binary before the setup wizard advances to sign-in.
     log(f"Verifying the {label} installation...")
-    verify_rc = _run_logged_process([binary, "--version"], log, env=_npm_environment(npm))
+    verify_rc = portable_node._run_logged_process(
+        [binary, "--version"], log, env=portable_node._npm_environment(npm)
+    )
     if verify_rc is None:
         return None
     if verify_rc != 0:
@@ -1618,7 +1320,7 @@ def _update_claude(binary: str, log: Callable[[str], None]) -> bool:
     label = backend_label(BACKEND_CLAUDE)
     argv = [binary, "update"]
     log(f"Checking for {label} updates...")
-    rc = _run_logged_process(argv, log)
+    rc = portable_node._run_logged_process(argv, log)
     if rc != 0:
         log(f"{label} update exited with code {rc}.")
         return False
@@ -1635,10 +1337,10 @@ def _update_npm_backend(backend: str, binary: str, log: Callable[[str], None]) -
     previous_freebuff_model = ""
     if backend == BACKEND_FREEBUFF:
         _models, previous_freebuff_model, _error = freebuff_model_options()
-    if _find_npm() is None and install_portable_node(log) is None:
+    if portable_node._find_npm() is None and portable_node.install_portable_node(log) is None:
         log(f"npm could not be installed, so BlindPilot cannot update {label} automatically.")
         return False
-    argv = _npm_update_argv(backend)
+    argv = portable_node._npm_update_argv(backend)
     if argv is None:
         log(f"npm could not be found, so BlindPilot cannot update {label} automatically.")
         return False
@@ -1651,13 +1353,15 @@ def _update_npm_backend(backend: str, binary: str, log: Callable[[str], None]) -
         log("Stopping opencode's server so its executable can be replaced...")
         stop_opencode_server()
     log(f"Checking for {label} updates...")
-    npm = _find_npm()
-    rc = _run_logged_process(argv, log, env=_npm_environment(npm) if npm else None)
+    npm = portable_node._find_npm()
+    rc = portable_node._run_logged_process(
+        argv, log, env=portable_node._npm_environment(npm) if npm else None
+    )
     if rc != 0:
         log(f"{label} update exited with code {rc}.")
         return False
-    install_path._add_to_process_path(_managed_npm_bin_dir())
-    managed_binary = _managed_backend_binary(backend)
+    install_path._add_to_process_path(portable_node._managed_npm_bin_dir())
+    managed_binary = portable_node._managed_backend_binary(backend)
     if managed_binary is None:
         log(f"{label} updated, but its executable was not found afterwards.")
         return False
@@ -1667,8 +1371,8 @@ def _update_npm_backend(backend: str, binary: str, log: Callable[[str], None]) -
             log(f"Added {Path(managed_binary).parent} to {changed}.")
     except OSError as exc:
         log(f"{label} updated, but adding it to PATH failed: {exc}")
-    verify_rc = _run_logged_process(
-        [managed_binary, "--version"], log, env=_npm_environment(npm or "")
+    verify_rc = portable_node._run_logged_process(
+        [managed_binary, "--version"], log, env=portable_node._npm_environment(npm or "")
     )
     if verify_rc is None:
         return False
@@ -1716,7 +1420,7 @@ def _update_hermes(binary: str, log: Callable[[str], None]) -> bool:
     # reports afterwards is the only fact that does.
     before = version_tuple(_executable_version(binary))
     log(f"Running the official {label} installer to update...")
-    rc = _run_logged_process(hermes_argv, log, env=_hermes_installer_env(log))
+    rc = portable_node._run_logged_process(hermes_argv, log, env=_hermes_installer_env(log))
     if rc is None:
         return False
     found = _hermes_binary_after_install()
@@ -1749,7 +1453,7 @@ def _update_muse(binary: str, log: Callable[[str], None]) -> bool:
         log(_muse_missing_prereq_message())
         return False
     log(f"Running the official {label} installer to update...")
-    rc = _run_logged_process(muse_argv, log)
+    rc = portable_node._run_logged_process(muse_argv, log)
     if rc is None:
         return False
     if not muse_installed():
@@ -12738,12 +12442,12 @@ class SetupWizard(wx.Dialog):
             return _hermes_install_argv()
         if backend == BACKEND_MUSE:
             return _muse_install_argv()
-        argv = _npm_install_argv(backend)
+        argv = portable_node._npm_install_argv(backend)
         if argv is not None:
             return argv
         # The actual Node.js command is discovered at install time. A sentinel
         # keeps the accessible Install button available on a clean computer.
-        return ["managed-node-lts"] if _automatic_npm_install_available() else None
+        return ["managed-node-lts"] if portable_node._automatic_npm_install_available() else None
 
     # ---- navigation ----
 
@@ -12881,7 +12585,7 @@ class SetupWizard(wx.Dialog):
                     install_available = (
                         SetupWizard._selected_install_argv_for_backend(backend) is not None
                     )
-                    npm_available = _find_npm() is not None
+                    npm_available = portable_node._find_npm() is not None
                     facts = path, on_path, install_available, npm_available
                     error = ""
                 except Exception as exc:  # noqa: BLE001 - report check failures accessibly
@@ -13053,7 +12757,7 @@ class SetupWizard(wx.Dialog):
                 hint = "Tab to Add to PATH to make the CLI available in new terminals."
             self._next_btn.Enable(True)
             self._check_backend_updates(self._backend_path, force_update_check)
-        elif not _backend_installs_with_npm(self.backend):
+        elif not portable_node._backend_installs_with_npm(self.backend):
             # This backend does not come from npm: it has an installer of its
             # own. Offer it when the prerequisites are here, and name what is
             # missing when they are not. npm is never named, since saying it
@@ -13097,7 +12801,11 @@ class SetupWizard(wx.Dialog):
             else self._selected_install_argv() is not None
         ):
             self._cli_status.SetLabel(f"{info.label} is not installed.")
-            has_npm = npm_available if npm_available is not None else _find_npm() is not None
+            has_npm = (
+                npm_available
+                if npm_available is not None
+                else portable_node._find_npm() is not None
+            )
             if not has_npm:
                 self._cli_detail.SetLabel(
                     f"Choose Install {info.label}. BlindPilot will first install the "
@@ -13216,7 +12924,7 @@ class SetupWizard(wx.Dialog):
             # minute" for an install that could not happen, then report npm —
             # whether or not npm existed — three milliseconds later. Promise
             # nothing; say what is missing in the backend's own terms.
-            if _backend_installs_with_npm(self.backend):
+            if portable_node._backend_installs_with_npm(self.backend):
                 announce(_missing_prereq_message())
             elif self.backend == BACKEND_MUSE:
                 announce(_muse_missing_prereq_message())
@@ -17796,7 +17504,7 @@ def main() -> int:
     # PATH that points back into its own install folder, or the files there
     # stay open long after BlindPilot has closed and cannot be updated.
     install_path.keep_bundle_off_child_path()
-    activate_managed_cli_paths()
+    portable_node.activate_managed_cli_paths()
     app = wx.App(False)
     # The application menu on macOS reads the display name; without this it
     # says "Python" when BlindPilot is run from source.
