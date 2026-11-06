@@ -18157,8 +18157,8 @@ def main() -> int:
     appearance = _valid_appearance(cfg.get("appearance"))
     set_appearance = getattr(app, "SetAppearance", None)
     if set_appearance is None:
-        # wxPython before 4.3 has no appearance API. requirements.txt allows
-        # 4.2, so the setting is simply not applied there.
+        # wxPython before 4.3 has no appearance API. requirements.txt requires
+        # 4.3.2 or later, so this only covers a source checkout on an older one.
         logging.getLogger("blindpilot").info(
             "appearance %s was not applied, this wxPython cannot set it", appearance
         )
