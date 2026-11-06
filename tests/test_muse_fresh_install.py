@@ -22,6 +22,7 @@ import sys
 import blindpilot_app as app
 import muse_backend
 import museai_backend
+import portable_node
 
 
 def test_muse_install_argv_windows_needs_only_wsl(monkeypatch):
@@ -148,7 +149,7 @@ def test_install_museai_bootstraps_uv_on_a_fresh_computer(monkeypatch):
 
     monkeypatch.setattr(museai_backend, "museai_install_argv", argv_after_bootstrap)
     monkeypatch.setattr(app, "_install_uv", lambda _log: True)
-    monkeypatch.setattr(app, "_run_logged_process", lambda _argv, _log, env=None: 0)
+    monkeypatch.setattr(portable_node, "_run_logged_process", lambda _argv, _log, env=None: 0)
     monkeypatch.setattr(app, "find_backend_cli", lambda _backend: "/home/u/.local/bin/muse-cli")
 
     log: list[str] = []

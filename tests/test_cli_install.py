@@ -28,11 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
 import install_path  # noqa: E402
+import portable_node  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_FREEBUFF,
     _first_login_url,
     _install_argv,
-    _node_archive_spec,
     install_backend,
     install_claude,
 )
@@ -46,6 +46,7 @@ from install_path import (  # noqa: E402
     _shell_profile_file,
     ensure_on_posix_path,
 )
+from portable_node import _node_archive_spec  # noqa: E402
 
 WINDOWS = platform.system() == "Windows"
 
@@ -53,9 +54,11 @@ WINDOWS = platform.system() == "Windows"
 class _Patch:
     """Swap module attributes for the duration of a with-block.
 
-    The PATH helpers live in ``install_path``, and the window reaches them as
-    ``install_path.<name>``, so a patch has to land on the module that reads
-    the name. ``platform`` is read by both, so a patch on it lands on both.
+    The PATH helpers live in ``install_path`` and the npm / portable-Node
+    helpers in ``portable_node``, and the window reaches them as
+    ``install_path.<name>`` and ``portable_node.<name>``, so a patch has to land
+    on the module that reads the name. ``platform`` is read by all three, so a
+    patch on it lands on all three.
     """
 
     def __init__(self, **kwargs):
@@ -64,7 +67,11 @@ class _Patch:
 
     def __enter__(self):
         for name, value in self._new.items():
-            owners = [module for module in (blindpilot_app, install_path) if name in vars(module)]
+            owners = [
+                module
+                for module in (blindpilot_app, install_path, portable_node)
+                if name in vars(module)
+            ]
             if not owners:
                 raise AttributeError(name)
             for module in owners:
