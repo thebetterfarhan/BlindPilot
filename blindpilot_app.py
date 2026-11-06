@@ -2278,11 +2278,15 @@ def adopt_full_auto_default(config: dict) -> bool:
 
     Returns whether ``config`` was changed. Only a mode saved by an older
     BlindPilot is moved: once this has run, a mode chosen in the picker is
-    the user's and is left exactly where they put it.
+    the user's and is left exactly where they put it. The previous default is
+    the only value that means "never moved", so the migration test is the saved
+    mode itself and no marker key of its own is written - a config still
+    carrying the old ``permission_default`` marker has it dropped here.
     """
-    if config.get("permission_default") == DEFAULT_PERMISSION_MODE:
+    mode = config.get("permission_mode")
+    if "permission_default" not in config and mode not in (None, "default"):
         return False
-    config["permission_default"] = DEFAULT_PERMISSION_MODE
+    config.pop("permission_default", None)
     config["permission_mode"] = DEFAULT_PERMISSION_MODE
     return True
 
