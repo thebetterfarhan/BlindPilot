@@ -25,6 +25,7 @@ import claude_worker  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_CODEX,
     BACKEND_COMMANDCODE,
+    BACKEND_COPILOT,
     BACKEND_FREEBUFF,
     _npm_update_argv,
     _repair_claude_native_update,
@@ -230,6 +231,36 @@ def test_each_directory_is_cached_separately():
     _RUNS.clear()
     _probe_with(MODEL_OUTPUT, HELP_OUTPUT, cwd="/tmp/two", max_age=900)
     assert _RUNS, "another directory must be probed on its own"
+
+
+@pytest.mark.parametrize("backend", [BACKEND_FREEBUFF, BACKEND_COPILOT])
+def test_freebuff_and_copilot_reuse_a_recent_catalogue(monkeypatch, backend):
+    """These two were the only backends that skipped the model cache."""
+    _clear_probe_cache()
+    calls: list[int] = []
+
+    if backend == BACKEND_FREEBUFF:
+        monkeypatch.setattr(
+            blindpilot_app,
+            "freebuff_model_options",
+            lambda: (calls.append(1) or ["freebuff-auto"], "freebuff-auto", ""),
+        )
+    else:
+        import copilot_backend
+
+        monkeypatch.setattr(
+            copilot_backend,
+            "copilot_model_options",
+            lambda: (calls.append(1) or ["auto"], [], "auto", "", ""),
+        )
+    monkeypatch.setattr(blindpilot_app, "find_backend_cli", lambda _backend: "fake-cli")
+
+    first = probe_model_options(None, max_age=60, backend=backend)
+    second = probe_model_options(None, max_age=60, backend=backend)
+
+    assert len(calls) == 1, "the second probe re-asked instead of reusing the cache"
+    assert first.from_cache is False
+    assert second.from_cache is True
 
 
 def test_a_failed_probe_is_not_cached():
