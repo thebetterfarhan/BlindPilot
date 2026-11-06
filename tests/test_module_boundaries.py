@@ -19,6 +19,7 @@ import claude_session
 import claude_worker
 import earcons
 import install_path
+import installers
 import portable_node
 import process_utils
 import question_dialog
@@ -176,9 +177,11 @@ def test_the_portable_node_helpers_live_in_portable_node():
     ):
         assert getattr(portable_node, name).__module__ == "portable_node", name
         assert not hasattr(blindpilot_app, name), name
-    # `_install_npm_backend` stays behind: it drops the window's Codex and
-    # OpenCode processes, which go with the dispatch rather than with npm.
-    assert hasattr(blindpilot_app, "_install_npm_backend")
+    # The installer that dispatches per backend moved with them: it is the
+    # module that drops the Codex and OpenCode processes before npm replaces
+    # their executables, and the window now only calls it.
+    assert hasattr(installers, "_install_npm_backend")
+    assert not hasattr(blindpilot_app, "_install_npm_backend")
     assert not hasattr(portable_node, "_install_npm_backend")
 
 

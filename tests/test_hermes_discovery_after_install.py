@@ -94,10 +94,11 @@ def test_the_installer_bin_dir_goes_on_the_search_path(monkeypatch, tmp_path):
     monkeypatch.setattr(hermes_backend.platform, "system", lambda: "Windows")
     import blindpilot_app as app
     import install_path
+    import installers
 
     monkeypatch.setattr(app.platform, "system", lambda: "Windows")
     monkeypatch.setattr(hermes_backend, "find_hermes_cli", lambda: "C:/l/hermes/bin/hermes.exe")
     monkeypatch.setattr(install_path, "_add_to_process_path", lambda p: added.append(Path(p)))
 
-    assert app._hermes_binary_after_install() == "C:/l/hermes/bin/hermes.exe"
+    assert installers._hermes_binary_after_install() == "C:/l/hermes/bin/hermes.exe"
     assert hermes_bin in added

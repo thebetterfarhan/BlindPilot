@@ -28,10 +28,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blindpilot_app  # noqa: E402
 import install_path  # noqa: E402
+import installers  # noqa: E402
 import portable_node  # noqa: E402
 from blindpilot_app import (  # noqa: E402
     BACKEND_FREEBUFF,
     _first_login_url,
+)
+from installers import (  # noqa: E402
     _install_argv,
     install_backend,
     install_claude,
@@ -69,7 +72,7 @@ class _Patch:
         for name, value in self._new.items():
             owners = [
                 module
-                for module in (blindpilot_app, install_path, portable_node)
+                for module in (blindpilot_app, install_path, portable_node, installers)
                 if name in vars(module)
             ]
             if not owners:
@@ -659,12 +662,12 @@ def test_every_backend_has_an_installer():
     branch was sent to npm even when it does not ship there. One table means a
     new backend has to answer this question, or fail here.
     """
-    assert set(blindpilot_app.INSTALLERS) == set(blindpilot_app.BACKENDS)
+    assert set(installers.INSTALLERS) == set(blindpilot_app.BACKENDS)
 
 
 def test_every_backend_has_an_updater():
     """No backend may fall through to the npm update path."""
-    assert set(blindpilot_app.UPDATERS) == set(blindpilot_app.BACKENDS)
+    assert set(installers.UPDATERS) == set(blindpilot_app.BACKENDS)
 
 
 if __name__ == "__main__":

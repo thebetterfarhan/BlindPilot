@@ -15,6 +15,7 @@ import pytest
 
 import backend_pool
 import blindpilot_app as app
+import installers
 import portable_node
 
 
@@ -72,7 +73,7 @@ def test_updating_codex_drops_every_held_app_server(held, monkeypatch):
     elsewhere = _held(held, backend_pool.pool_key(app.BACKEND_CLAUDE, _AnotherBackendsTab()))
     log: list[str] = []
 
-    assert app.update_backend(app.BACKEND_CODEX, log.append) is False
+    assert installers.update_backend(app.BACKEND_CODEX, log.append) is False
 
     assert (login.stops, work.stops, personal.stops) == (1, 1, 1), (
         "an Account's app-server was left running over the executable npm replaces"
@@ -88,7 +89,7 @@ def test_installing_codex_drops_every_held_app_server(held, monkeypatch):
     login = _held(held, backend_pool.pool_key(app.BACKEND_CODEX))
     work = _held(held, backend_pool.pool_key(app.BACKEND_CODEX, account=7))
 
-    assert app.install_backend(app.BACKEND_CODEX, lambda _line: None) is None
+    assert installers.install_backend(app.BACKEND_CODEX, lambda _line: None) is None
 
     assert (login.stops, work.stops) == (1, 1)
 
@@ -100,6 +101,6 @@ def test_other_backends_leave_the_codex_server_alone(held, monkeypatch):
     monkeypatch.setattr(app, "freebuff_model_options", lambda: ([], "", ""))
     work = _held(held, backend_pool.pool_key(app.BACKEND_CODEX, account=7))
 
-    app.update_backend(app.BACKEND_FREEBUFF, lambda _line: None)
+    installers.update_backend(app.BACKEND_FREEBUFF, lambda _line: None)
 
     assert work.stops == 0
