@@ -2378,9 +2378,14 @@ def _probe_codex_models(cwd: Optional[str], binary: Optional[str]) -> ModelOptio
     return options
 
 
-def _probe_freebuff_models(_cwd: Optional[str], _binary: Optional[str]) -> ModelOptions:
+def _probe_freebuff_models(cwd: Optional[str], binary: Optional[str]) -> ModelOptions:
     models, current_model, error = freebuff_model_options()
-    return ModelOptions(models, [], current_model, "", error)
+    options = ModelOptions(models, [], current_model, "", error)
+    if models and binary is not None:
+        # Cached like every other catalogue: reopening the picker reuses a
+        # recent answer instead of re-reading the CLI's files.
+        _remember_model_options(BACKEND_FREEBUFF, cwd, binary, options)
+    return options
 
 
 def _probe_opencode_models(cwd: Optional[str], binary: Optional[str]) -> ModelOptions:
@@ -2428,13 +2433,18 @@ def _probe_antigravity_models(cwd: Optional[str], binary: Optional[str]) -> Mode
     return options
 
 
-def _probe_copilot_models(_cwd: Optional[str], _binary: Optional[str]) -> ModelOptions:
+def _probe_copilot_models(cwd: Optional[str], binary: Optional[str]) -> ModelOptions:
     # No model-list command: "auto" and the configured model, and any id typed
     # into the picker.
     from copilot_backend import copilot_model_options
 
     models, efforts, current_model, current_effort, error = copilot_model_options()
-    return ModelOptions(models, efforts, current_model, current_effort, error)
+    options = ModelOptions(models, efforts, current_model, current_effort, error)
+    if models and binary is not None:
+        # Cached like every other catalogue: reopening the picker reuses a
+        # recent answer instead of re-reading the CLI's config.
+        _remember_model_options(BACKEND_COPILOT, cwd, binary, options)
+    return options
 
 
 def _probe_commandcode_models(cwd: Optional[str], binary: Optional[str]) -> ModelOptions:
