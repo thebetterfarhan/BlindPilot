@@ -299,7 +299,7 @@ def _hermes_bootstrap_failure(lines: Sequence[str]) -> str:
     """What to hear when Hermes' installer left no Python and no clear reason.
 
     uv's own sentence for a folder it is not allowed through is localised -- on
-    a Polish machine it begins "Nie moÅ¼na przejÅ›Ä‡ do tej Å›cieÅ¼ki" -- and the
+    a Polish machine it begins "Nie można przejść do tej ścieżki" -- and the
     installer exits 0 regardless, so the only stable text in the whole log is
     the error number and the name of the step that failed. Both are looked for
     here, because "exit code 0 but hermes was not found" describes nothing a
