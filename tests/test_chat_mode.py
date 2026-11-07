@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import wx
 
 import blindpilot_app
@@ -34,6 +37,11 @@ def test_mode_combo_opens_embedded_chat_without_replacing_agent_sessions(monkeyp
         chat_integration,
         "import_existing_accessible_ai_data",
         lambda _target: None,
+    )
+    monkeypatch.setattr(
+        blindpilot_app,
+        "_start_legacy_chat_import",
+        lambda on_done: on_done(None),
     )
 
     frame = blindpilot_app.MainFrame(str(tmp_path))
@@ -121,6 +129,11 @@ def _frame(monkeypatch, tmp_path, saved):
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda value: saved.update(value) or True)
     monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
     monkeypatch.setattr(chat_integration, "import_existing_accessible_ai_data", lambda _t: None)
+    monkeypatch.setattr(
+        blindpilot_app,
+        "_start_legacy_chat_import",
+        lambda on_done: on_done(None),
+    )
     return blindpilot_app.MainFrame(str(tmp_path))
 
 
@@ -130,6 +143,55 @@ def _destroy(frame, app, owns_app):
     wx.Yield()
     if owns_app:
         app.Destroy()
+
+
+def test_chat_switch_waits_for_legacy_copy_without_blocking_gui(monkeypatch, tmp_path):
+    owns_app = wx.GetApp() is None
+    app = wx.GetApp() or wx.App(False)
+    saved: dict[str, object] = {"setup_complete": True, "app_mode": "agent"}
+    monkeypatch.setattr(blindpilot_app, "_load_config", lambda: dict(saved))
+    monkeypatch.setattr(blindpilot_app, "_save_config", lambda value: saved.update(value) or True)
+    monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
+    monkeypatch.setattr(chat_integration, "_IMPORT_STARTED", False)
+    monkeypatch.setattr(chat_integration, "_IMPORTED", None)
+    started = threading.Event()
+    release = threading.Event()
+    copied = threading.Event()
+
+    def slow_copy(_target):
+        started.set()
+        release.wait(3)
+        copied.set()
+
+    monkeypatch.setattr(chat_integration, "import_existing_accessible_ai_data", slow_copy)
+    frame = blindpilot_app.MainFrame(str(tmp_path))
+    timeout = threading.Timer(2, release.set)
+    timeout.daemon = True
+    try:
+        assert started.wait(1)
+        timeout.start()
+        frame._set_app_mode(blindpilot_app.APP_MODE_CHAT)
+        assert not copied.is_set()
+        assert frame.chat_panel is None
+        assert frame.notebook.IsShown()
+        assert frame.mode_combo.GetSelection() == 0
+        assert saved["app_mode"] == "agent"
+        assert "Preparing Chat history" in frame.statusbar.GetStatusText()
+
+        release.set()
+        assert copied.wait(1)
+        deadline = time.monotonic() + 2
+        while frame.chat_panel is None and time.monotonic() < deadline:
+            app.ProcessPendingEvents()
+            wx.Yield()
+            time.sleep(0.01)
+        assert frame.chat_panel is not None
+        assert frame.chat_panel.IsShown()
+        assert saved["app_mode"] == "chat"
+    finally:
+        release.set()
+        timeout.cancel()
+        _destroy(frame, app, owns_app)
 
 
 def test_a_chat_mode_that_cannot_open_falls_back_to_agent_mode_completely(monkeypatch, tmp_path):

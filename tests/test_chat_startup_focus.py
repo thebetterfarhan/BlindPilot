@@ -35,6 +35,7 @@ def _frame(monkeypatch, tmp_path, mode: str):
     monkeypatch.setattr(blindpilot_app, "_save_config", lambda value: saved.update(value))
     monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
     monkeypatch.setattr(chat_integration, "import_existing_accessible_ai_data", lambda _t: None)
+    monkeypatch.setattr(blindpilot_app, "_start_legacy_chat_import", lambda done: done(None))
     return blindpilot_app.MainFrame(str(tmp_path))
 
 

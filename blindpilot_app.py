@@ -13101,7 +13101,7 @@ class PreferencesDialog(wx.Dialog):
         return APPEARANCES[self._appearance_box.GetSelection()][0]
 
 
-def _start_legacy_chat_import() -> None:
+def _start_legacy_chat_import(on_done: Callable[[Exception | None], None]) -> None:
     """Copy an older AccessibleAI database now, off the window's thread.
 
     Imported inside the thread: chat_integration pulls in the whole Chat panel.
@@ -13110,9 +13110,14 @@ def _start_legacy_chat_import() -> None:
     """
 
     def work() -> None:
-        from chat_integration import ensure_legacy_import
+        try:
+            from chat_integration import ensure_legacy_import
 
-        ensure_legacy_import()
+            ensure_legacy_import()
+        except Exception as exc:
+            _call_after_alive(on_done, exc)
+        else:
+            _call_after_alive(on_done, None)
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -13137,15 +13142,19 @@ class MainFrame(wx.Frame):
             settings=SETTINGS,
         )
         self._update_checking = False
-        # Started now, so the one-time copy of an older AccessibleAI database
-        # is already done by the time anyone switches to Chat mode.
-        _start_legacy_chat_import()
+        self._legacy_chat_import_done = False
+        self._legacy_chat_import_error: Exception | None = None
+        self._pending_chat_mode = False
+        self._pending_chat_announce_change = False
+        self._closing = False
+        _start_legacy_chat_import(self._on_legacy_chat_import_done)
 
         # Remembered "Projects folder" — the parent folder that holds the
         # user's project directories. New Session browses from there.
         cfg = _load_config()
         self._backend = normalize_backend(cfg.get("backend"))
-        self._app_mode = APP_MODE_CHAT if cfg.get("app_mode") == APP_MODE_CHAT else APP_MODE_AGENT
+        initial_mode = APP_MODE_CHAT if cfg.get("app_mode") == APP_MODE_CHAT else APP_MODE_AGENT
+        self._app_mode = APP_MODE_AGENT
         self._chat_model_order = _valid_chat_model_order(cfg.get("chat_model_order"))
         self.chat_panel = None
         pf = cfg.get("projects_folder")
@@ -13646,7 +13655,7 @@ class MainFrame(wx.Frame):
 
         self._add_session(initial_cwd)
         self._fit_tab_strip()
-        self._set_app_mode(self._app_mode, announce_change=False)
+        self._set_app_mode(initial_mode, announce_change=False)
         # Setting focus before the frame is on screen does not stick: Windows
         # has no visible window to give it to. Asking again after everything
         # queued during construction has run is what makes the mode that was
@@ -13825,11 +13834,30 @@ class MainFrame(wx.Frame):
         self.chat_panel.Hide()
         return self.chat_panel
 
+    def _on_legacy_chat_import_done(self, error: Exception | None) -> None:
+        if self._closing or not self:
+            return
+        self._legacy_chat_import_error = error
+        self._legacy_chat_import_done = True
+        if self._pending_chat_mode:
+            announce_change = self._pending_chat_announce_change
+            self._pending_chat_mode = False
+            self._set_app_mode(APP_MODE_CHAT, announce_change=announce_change)
+
     def _set_app_mode(self, mode: str, announce_change: bool = True) -> None:
         mode = APP_MODE_CHAT if mode == APP_MODE_CHAT else APP_MODE_AGENT
+        if mode == APP_MODE_CHAT and self.chat_panel is None and not self._legacy_chat_import_done:
+            self._pending_chat_mode = True
+            self._pending_chat_announce_change = announce_change
+            self.mode_combo.SetSelection(0)
+            self._announce_setting("Preparing Chat history. Chat will open when ready.")
+            return
+        self._pending_chat_mode = False
         chat_panel = self.chat_panel
         if mode == APP_MODE_CHAT:
             try:
+                if self._legacy_chat_import_error is not None:
+                    raise self._legacy_chat_import_error
                 chat_panel = self._ensure_chat_panel()
             except Exception as exc:
                 # Carry on as Agent mode, all the way through, so the saved
@@ -16478,6 +16506,7 @@ class MainFrame(wx.Frame):
                 refresh()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
+        self._closing = True
         self._agent_files_serial = getattr(self, "_agent_files_serial", 0) + 1
         self._desktop_shortcut_serial = getattr(self, "_desktop_shortcut_serial", 0) + 1
         timer = getattr(self, "_links_timer", None)
