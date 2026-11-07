@@ -144,6 +144,13 @@ def test_two_lookups_at_once_start_one_acp_server(monkeypatch):
 
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "command-code")
     monkeypatch.setattr(subprocess, "Popen", popen)
+    # A background fetch from an earlier test may still be running: the
+    # production path at blindpilot_app:1326 asks without waiting, which starts
+    # a daemon thread. It holds the *old* inflight dict, so replacing the dict
+    # below cannot stop it, and its own `Popen` would be counted as a second
+    # spanner of this test's server. Drain first, then take the folder.
+    for event in list(commandcode_backend._AGENT_COMMANDS_INFLIGHT.values()):
+        event.wait(10)
     monkeypatch.setattr(commandcode_backend, "_AGENT_COMMANDS", {})
     monkeypatch.setattr(commandcode_backend, "_AGENT_COMMANDS_INFLIGHT", {})
 
