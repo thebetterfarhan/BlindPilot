@@ -73,6 +73,50 @@ def test_something_checks_that_the_window_still_builds():
     )
 
 
+def test_the_tests_run_on_a_schedule_not_only_on_a_push():
+    """A flaky test is only found by running it.
+
+    This suite has produced failures that appeared on one platform in one run in
+    several, and each was found by accident: a push happened to be in flight. A
+    nightly run on the default branch is the check that does not depend on
+    somebody pushing on a hunch.
+    """
+    testing = [text for text in _workflow_text().values() if "pytest" in text]
+    assert any("schedule:" in text and "cron:" in text for text in testing), (
+        "nothing runs the tests on a schedule, so a flake waits for the next push"
+    )
+
+
+def test_the_security_scan_covers_branches_that_are_not_main_yet():
+    """A long-lived branch is the code nobody has reviewed.
+
+    Scanning it only after it merges is scanning it too late to matter.
+    """
+    codeql = [
+        text
+        for text in _workflow_text().values()
+        if "codeql" in text.lower() or "security-events: write" in text
+    ]
+    assert codeql, "no security scanning workflow"
+    for text in codeql:
+        lines = text.splitlines()
+        try:
+            start = next(index for index, line in enumerate(lines) if line.strip() == "push:")
+        except StopIteration:
+            continue
+        # The `branches:` under this `push:` is the next line indented deeper.
+        block = []
+        for line in lines[start + 1 :]:
+            if line.strip() and not line.startswith("    "):
+                break  # back out of the push block
+            block.append(line)
+        joined = "\n".join(block)
+        assert '"**"' in joined or "'**'" in joined, (
+            "the security scan only runs on selected branches, so an unreviewed "
+            "branch is scanned only after it merges"
+        )
+
+
 @pytest.mark.parametrize("platform", ["windows", "macos", "ubuntu"])
 def test_the_tests_run_on_every_platform_that_ships(platform):
     """Linux code ships — `linux_accessibility.py`, pexpect, the POSIX process
