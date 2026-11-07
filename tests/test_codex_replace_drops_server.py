@@ -54,7 +54,10 @@ def held(monkeypatch):
     pool = backend_pool.BackendPool()
     monkeypatch.setattr(backend_pool, "pool", lambda: pool)
     monkeypatch.setattr(portable_node, "_find_npm", lambda: "npm")
-    monkeypatch.setattr(app, "find_backend_cli", lambda backend: "C:/managed/codex.cmd")
+    # `installers` holds its own reference to this, so patching the window's
+    # name would be ignored and the test would only pass on a machine that
+    # happens to have Codex installed.
+    monkeypatch.setattr(installers, "find_backend_cli", lambda backend: "C:/managed/codex.cmd")
     # None is "could not be started": both paths give up there, after the drop.
     monkeypatch.setattr(portable_node, "_run_logged_process", lambda *args, **kwargs: None)
     try:
