@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
+
 from pathlib import Path
 
 import chat_integration
@@ -32,12 +32,12 @@ def test_tests_never_touch_the_installed_apps_data_folder(tmp_path):
 
 
 def test_the_legacy_copy_happens_once_and_reports_its_source(monkeypatch, tmp_path):
-    """The copy used to happen on the first switch, freezing the window."""
+    """The copy used to happen on the first switch, Stalling the window."""
     target = tmp_path / "chat.sqlite3"
     legacy = tmp_path / "legacy.sqlite3"
     monkeypatch.setattr(chat_integration, "database_path", lambda: target)
     monkeypatch.setattr(chat_integration, "_IMPORT_STARTED", False)
-    monkeypatch.setattr(chat_integration, "_IMPORT_DONE", threading.Event())
+
     monkeypatch.setattr(chat_integration, "_IMPORTED", None)
     copied: list[Path] = []
     monkeypatch.setattr(
@@ -58,7 +58,7 @@ def test_a_copy_that_finds_nothing_still_happens_before_the_panel_opens(monkeypa
     target = tmp_path / "chat.sqlite3"
     monkeypatch.setattr(chat_integration, "database_path", lambda: target)
     monkeypatch.setattr(chat_integration, "_IMPORT_STARTED", False)
-    monkeypatch.setattr(chat_integration, "_IMPORT_DONE", threading.Event())
+
     monkeypatch.setattr(chat_integration, "_IMPORTED", None)
     seen: list[Path] = []
     monkeypatch.setattr(
