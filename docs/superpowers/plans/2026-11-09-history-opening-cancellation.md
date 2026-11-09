@@ -35,13 +35,13 @@
 
 **Interfaces:** Produce `HistoryOpenData` with `turns: list[HistoryTurn]`, `tasks: TaskList`, `task_warning: str = ""`, and `prepare_history_open(entry: HistoryEntry) -> HistoryOpenData`. Extend `restore_tasks(entry, *, strict_errors: bool = False)` so the new path can distinguish real read/cap failure while legacy calls remain silent. Extend `SessionPanel.restore_history(entry, turns, *, tasks: TaskList | None = None)` so absent tasks means an empty in-memory task list, never a transcript read.
 
-- [ ] Write a failing prepared-load test using a real supported transcript with task events; assert correct turns and reconstructed task state through the preparation interface.
-- [ ] Run that test and confirm failure before introducing the new preparation interface.
-- [ ] Implement the data/result interface and strict optional task-error reporting. Unsupported backends and valid empty tasks must be successful empty results; cap/read errors in the new path become one warning, preserving legacy suppression.
-- [ ] Add tests for actual task failure after valid turns, a size-cap skip after text load, legacy compatibility and valid empty/unsupported task state. Use deterministic fixture/file transitions; do not let parser mocks replace behavior being asserted.
-- [ ] Adapt the history-opening worker and completion handler to pass prepared task state. Remove task file I/O from session restoration; handle the two muse.ai restoration callers explicitly with empty task state.
-- [ ] Extend real asynchronous opening tests to prove both parsers run off the GUI thread and prepared task state reaches the opened session. Verify optional warning exactly once and text remains available. Update test patches at the true used binding; preserve the stale-patch contract.
-- [ ] Run focused history/task/muse.ai tests, lint/format, configured types and full warning-as-error suite before committing this complete vertical slice.
+- [x] Write a failing prepared-load test using a real supported transcript with task events; assert correct turns and reconstructed task state through the preparation interface.
+- [x] Run that test and confirm failure before introducing the new preparation interface.
+- [x] Implement the data/result interface and strict optional task-error reporting. Unsupported backends and valid empty tasks must be successful empty results; cap/read errors in the new path become one warning, preserving legacy suppression.
+- [x] Add tests for actual task failure after valid turns, a size-cap skip after text load, legacy compatibility and valid empty/unsupported task state. Use deterministic fixture/file transitions; do not let parser mocks replace behavior being asserted.
+- [x] Adapt the history-opening worker and completion handler to pass prepared task state. Remove task file I/O from session restoration; handle the two muse.ai restoration callers explicitly with empty task state.
+- [x] Extend real asynchronous opening tests to prove both parsers run off the GUI thread and prepared task state reaches the opened session. Verify optional warning exactly once and text remains available. Update test patches at the true used binding; preserve the stale-patch contract.
+- [x] Run focused history/task/muse.ai tests, lint/format, configured types and full warning-as-error suite before committing this complete vertical slice.
 
 ### Task 2: Immediate cancellation and safe reader checkpoints
 
@@ -49,18 +49,37 @@
 
 **Interfaces:** Consume Task 1's `HistoryOpenData`. Add keyword-only `cancelled: Callable[[], bool] | None = None` to `prepare_history_open`, `load_turns` and `restore_tasks`, propagating it to relevant reader/iteration helpers. Use a distinct `HistoryOpenCancelled` exception for cooperative cancellation so it cannot become successful partial data or an optional-task warning. Keep default one-argument reader behavior compatible where no cancellation is requested.
 
-- [ ] Write a failing real-reader test that sets cancellation after a controlled number of JSONL records; assert remaining records are not consumed and the cancellation outcome is distinct from ordinary failure.
-- [ ] Add checkpoints before and after reader calls, between preparation phases and before delivery; check physical JSONL lines including blank/malformed records, task replay and available row/item loops. Existing blocking steps retain their timeouts; no arbitrary thread/process termination.
-- [ ] Test pre-cancelled input, mid-read/replay cancellation, cancellation between phases, file/resource cleanup and no partial result. Use synchronization or counted records rather than wall-clock thresholds.
-- [ ] Write a failing GUI test where the worker remains blocked: Cancel/close must clear progress and announce once before release. Release late success/error and assert no tab, viewer, on-open action or late announcement.
-- [ ] Implement immediate detachment: set the cancellation event, invalidate request identity and clear progress/widget references before destruction. Explicit Cancel announces once; replacement quietly invalidates old work. Cancellation after completion is harmless.
-- [ ] Add main-window close cancellation/invalidation with no waits and no announcement into a closing UI.
-- [ ] Cover queued completion before/after Cancel, repeated cancel/close, superseded success/error leaving new progress intact, and unchanged successful opening. Use actual production delivery seams.
-- [ ] Run focused checks, Ruff check/format, configured mypy, full `-W error -n 4 --dist loadfile` suite and both source startup smokes under Xvfb. Use the prepared activation script; remove GitHub sign-in variables only from test subprocesses.
-- [ ] Commit the clean slice, integrate it, then obtain independent Luna standards/spec reviews of the combined feature. Fix material findings in one fresh Luna implementer and rerun affected/required gates.
+- [x] Write a failing real-reader test that sets cancellation after a controlled number of JSONL records; assert remaining records are not consumed and the cancellation outcome is distinct from ordinary failure.
+- [x] Add checkpoints before and after reader calls, between preparation phases and before delivery; check physical JSONL lines including blank/malformed records, task replay and available row/item loops. Existing blocking steps retain their timeouts; no arbitrary thread/process termination.
+- [x] Test pre-cancelled input, mid-read/replay cancellation, cancellation between phases, file/resource cleanup and no partial result. Use synchronization or counted records rather than wall-clock thresholds.
+- [x] Write a failing GUI test where the worker remains blocked: Cancel/close must clear progress and announce once before release. Release late success/error and assert no tab, viewer, on-open action or late announcement.
+- [x] Implement immediate detachment: set the cancellation event, invalidate request identity and clear progress/widget references before destruction. Explicit Cancel announces once; replacement quietly invalidates old work. Cancellation after completion is harmless.
+- [x] Add main-window close cancellation/invalidation with no waits and no announcement into a closing UI.
+- [x] Cover queued completion before/after Cancel, repeated cancel/close, superseded success/error leaving new progress intact, and unchanged successful opening. Use actual production delivery seams.
+- [x] Run focused checks, Ruff check/format, configured mypy, full `-W error -n 4 --dist loadfile` suite and both source startup smokes under Xvfb. Use the prepared activation script; remove GitHub sign-in variables only from test subprocesses.
+- [x] Commit the clean slice, integrate it, then obtain independent Luna standards/spec reviews of the combined feature. Fix material findings in one fresh Luna implementer and rerun affected/required gates.
 
 ## Execution and delivery
 
 Tracker: spec #99, Task 1 #100, Task 2 #101; #101 is blocked by #100.
 
 The user explicitly selected to-spec, to-tickets and implement-spec; no further execution-method selection is needed. Publish one parent spec and two linked child tickets, with Task 2 blocked by Task 1. Fresh Luna implementers use separate worktrees from the integration branch; merger agents integrate clean committed results. Capture final test evidence and unrun Windows/macOS/live screen-reader checks. Do not push new feature code or publish the environment without authorization for this feature.
+
+## Final verification (2026-11-09)
+
+- Integrated preparation commit `c712d6c` and cancellation commit `4d9b9c6` on
+  `feature/history-opening-cancellation`, based on the callback-coverage feature.
+- Task 1 focused checks: 84 passed; its full suite: 2,920 passed, 50 skipped.
+- Final focused cancellation/history checks: 32 passed. Final full warning-as-error
+  suite with four workers: 2,929 passed, 50 skipped.
+- Ruff check and format, configured mypy (41 source files), and both source
+  startup smoke modes passed under Xvfb with isolated XDG profiles.
+- Independent Luna spec review found no reportable gaps. Independent Luna
+  standards review found no remaining actionable violations. A concern about
+  omitted task state was resolved against the approved interface: UI restoration
+  defaults to empty in-memory tasks; legacy history-reader defaults remain intact.
+- Cooperative cancellation is observed at checkpoints; an existing blocking
+  database, whole-document, WSL or CLI step can finish before it observes it.
+- Windows/macOS and live screen-reader checks remain unrun; the user explicitly
+  deferred screen-reader validation. No claim of that verification is made.
+- No new feature code was pushed and the environment was not published.
