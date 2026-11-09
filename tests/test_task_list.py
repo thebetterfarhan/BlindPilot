@@ -128,6 +128,173 @@ def test_a_reopened_claude_conversation_gets_its_task_list_back(tmp_path):
     assert restore_tasks(HistoryEntry("codex", "s", "t", str(path), 0.0)).lines() == []
 
 
+def test_prepared_history_contains_turns_and_replayed_tasks(tmp_path):
+    import json
+
+    from session_history import HistoryEntry, prepare_history_open
+
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Ship this"}},
+        {"type": "assistant", "message": {"role": "assistant", "content": "Done."}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "task-1",
+                        "name": "TaskCreate",
+                        "input": {"subject": "Verify the release"},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "task-1",
+                        "content": "Task #1 created successfully",
+                    }
+                ],
+            },
+        },
+    ]
+    path = tmp_path / "session.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+    prepared = prepare_history_open(HistoryEntry("claude", "s", "t", str(path), 0.0))
+
+    assert [(turn.prompt, turn.response) for turn in prepared.turns] == [("Ship this", "Done.")]
+    assert prepared.tasks.lines() == ["1. To do: Verify the release"]
+    assert prepared.task_warning == ""
+
+
+def test_prepared_history_keeps_text_when_task_transcript_disappears(tmp_path, monkeypatch):
+    import json
+
+    import session_history
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Question"}}),
+        encoding="utf-8",
+    )
+    real_reader = session_history._READERS["claude"]
+
+    def load_then_remove(entry):
+        turns = real_reader(entry)
+        path.unlink()
+        return turns
+
+    monkeypatch.setitem(session_history._READERS, "claude", load_then_remove)
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("claude", "s", "t", str(path), 0.0)
+    )
+
+    assert [turn.prompt for turn in prepared.turns] == ["Question"]
+    assert prepared.tasks.lines() == []
+    assert prepared.task_warning == "Task list could not be restored."
+
+
+def test_prepared_history_keeps_text_when_task_replay_raises(tmp_path, monkeypatch):
+    import json
+
+    import session_history
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Question"}}),
+        encoding="utf-8",
+    )
+
+    def fail_task_replay(*_args, **_kwargs):
+        raise ValueError("unexpected task payload")
+
+    monkeypatch.setattr(session_history, "restore_tasks", fail_task_replay)
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("claude", "s", "t", str(path), 0.0)
+    )
+
+    assert [turn.prompt for turn in prepared.turns] == ["Question"]
+    assert prepared.tasks.lines() == []
+    assert prepared.task_warning == "Task list could not be restored."
+
+
+def test_prepared_history_skips_task_replay_when_no_turns_loaded(tmp_path, monkeypatch):
+    import session_history
+
+    def fail_task_replay(*_args, **_kwargs):
+        raise AssertionError("task replay should follow valid conversation text")
+
+    monkeypatch.setattr(session_history, "restore_tasks", fail_task_replay)
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("claude", "s", "t", str(tmp_path / "gone"), 0.0)
+    )
+
+    assert prepared.turns == []
+    assert prepared.tasks.lines() == []
+    assert prepared.task_warning == ""
+
+
+def test_prepared_history_warns_when_task_transcript_grows_past_cap(tmp_path, monkeypatch):
+    import json
+
+    import session_history
+
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Question"}}),
+        encoding="utf-8",
+    )
+    real_reader = session_history._READERS["claude"]
+
+    def load_then_grow(entry):
+        turns = real_reader(entry)
+        with path.open("a", encoding="utf-8") as transcript:
+            transcript.write(" " * 4)
+        monkeypatch.setattr(session_history, "_MAX_TRANSCRIPT_BYTES", 1)
+        return turns
+
+    monkeypatch.setitem(session_history._READERS, "claude", load_then_grow)
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("claude", "s", "t", str(path), 0.0)
+    )
+
+    assert [turn.prompt for turn in prepared.turns] == ["Question"]
+    assert prepared.tasks.lines() == []
+    assert prepared.task_warning == "Task list could not be restored."
+
+
+def test_legacy_task_reader_keeps_silent_empty_behavior_for_missing_transcript(tmp_path):
+    from session_history import HistoryEntry, restore_tasks
+
+    assert restore_tasks(HistoryEntry("claude", "s", "t", str(tmp_path / "gone"), 0)).lines() == []
+
+
+def test_prepared_history_treats_unsupported_backend_as_silent_empty(tmp_path):
+    import json
+
+    import session_history
+
+    path = tmp_path / "conversation.jsonl"
+    path.write_text(
+        json.dumps({"type": "message", "message": {"role": "user", "content": "Question"}}),
+        encoding="utf-8",
+    )
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("commandcode", "s", "t", str(path), 0)
+    )
+
+    assert prepared.turns
+    assert prepared.tasks.lines() == []
+    assert prepared.task_warning == ""
+
+
 def test_a_reopened_copilot_conversation_gets_its_checklist_back(tmp_path):
     import json
 

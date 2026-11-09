@@ -96,8 +96,8 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
             loaded = []
             original_restore = blindpilot_app.SessionPanel.restore_history
 
-            def track_restore(panel, entry, turns):
-                original_restore(panel, entry, turns)
+            def track_restore(panel, entry, turns, **kwargs):
+                original_restore(panel, entry, turns, **kwargs)
                 loaded.append(panel)
 
             monkeypatch.setattr(blindpilot_app.SessionPanel, "restore_history", track_restore)

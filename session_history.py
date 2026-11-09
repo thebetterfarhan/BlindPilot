@@ -134,6 +134,15 @@ class HistoryTurn:
     sequence: Optional[int] = None
 
 
+@dataclass
+class HistoryOpenData:
+    """Conversation text and optional task state prepared away from the GUI."""
+
+    turns: list[HistoryTurn]
+    tasks: TaskList
+    task_warning: str = ""
+
+
 # Every CLI stuffs context of its own into the user side of the transcript —
 # environment blocks, skills manifests, system reminders, plugin listings,
 # slash-command wrappers — all of it wrapped in an XML-ish element. Removing
@@ -261,7 +270,9 @@ def _content_text(content: object, kinds: Sequence[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
+def _iter_jsonl(
+    path: Path, limit: Optional[int] = None, *, strict_errors: bool = False
+) -> Iterator[dict]:
     """Yield the JSON objects in a JSONL transcript, skipping unreadable lines.
 
     A transcript being written to right now can end in a half-flushed line, and
@@ -283,6 +294,8 @@ def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
                 if isinstance(record, dict):
                     yield record
     except OSError:
+        if strict_errors:
+            raise
         return
 
 
@@ -1716,7 +1729,7 @@ def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
     return [turn for turn in turns if turn.prompt.strip() or turn.response.strip()]
 
 
-def restore_tasks(entry: HistoryEntry) -> TaskList:
+def restore_tasks(entry: HistoryEntry, *, strict_errors: bool = False) -> TaskList:
     """The task list a past conversation left, replayed from its transcript.
 
     Claude Code's task tools (tool_use, then the tool_result that gives
@@ -1726,15 +1739,19 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
     tasks = TaskList()
     backend = normalize_backend(entry.backend)
     path = Path(entry.path)
+    if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT):
+        return tasks
     try:
-        if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT) or (
-            path.stat().st_size > _MAX_TRANSCRIPT_BYTES
-        ):
+        if path.stat().st_size > _MAX_TRANSCRIPT_BYTES:
+            if strict_errors:
+                raise OSError("task transcript exceeds the size limit")
             return tasks
     except OSError:
+        if strict_errors:
+            raise
         return tasks
     calls: dict[str, tuple[str, dict]] = {}
-    for record in _iter_jsonl(path):
+    for record in _iter_jsonl(path, strict_errors=strict_errors):
         if backend == BACKEND_COPILOT:
             data = record.get("data")
             if record.get("type") == "tool.execution_start" and isinstance(data, dict):
@@ -1761,6 +1778,20 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
                         result = block["content"]
                     tasks.apply_claude(call[0], call[1], result)
     return tasks
+
+
+def prepare_history_open(entry: HistoryEntry) -> HistoryOpenData:
+    """Read conversation turns and optional task state for a saved opening."""
+    turns = load_turns(entry)
+    if not turns:
+        return HistoryOpenData(turns=turns, tasks=TaskList())
+    try:
+        tasks = restore_tasks(entry, strict_errors=True)
+        warning = ""
+    except Exception:  # noqa: BLE001 - task state is optional after valid text loads
+        tasks = TaskList()
+        warning = "Task list could not be restored."
+    return HistoryOpenData(turns=turns, tasks=tasks, task_warning=warning)
 
 
 def describe_age(modified: float, now: Optional[float] = None) -> str:
