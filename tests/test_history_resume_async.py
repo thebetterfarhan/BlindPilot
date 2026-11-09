@@ -333,7 +333,8 @@ def test_optional_task_warning_is_announced_once_and_text_still_opens(monkeypatc
             frame.Destroy()
 
 
-def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path):
+@pytest.mark.parametrize("directory_exists", [True, False])
+def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path, directory_exists):
     with _running_app():
         frame = _frame(monkeypatch, tmp_path)
         try:
@@ -370,12 +371,24 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
                 },
             ]
             path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
-            entry = session_history.HistoryEntry("claude", "saved", "Saved chat", str(path), 1)
+            directory = tmp_path / "saved-project"
+            if directory_exists:
+                directory.mkdir()
+            fallback_cwd = frame._history_cwd()
+            entry = session_history.HistoryEntry(
+                "claude", "saved", "Saved chat", str(path), 1, cwd=str(directory)
+            )
             gui_thread = threading.get_ident()
             parser_threads = []
             real_restore = app.SessionPanel.restore_history
             real_reader = session_history._READERS["claude"]
             real_restore_tasks = session_history.restore_tasks
+            real_isdir = app.os.path.isdir
+
+            def track_directory_probe(candidate):
+                if str(candidate) == str(directory):
+                    parser_threads.append(("directory", threading.get_ident()))
+                return real_isdir(candidate)
 
             def track_turn_reader(chosen, *, cancelled=None):
                 parser_threads.append(("turns", threading.get_ident()))
@@ -399,6 +412,7 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
             monkeypatch.setattr(session_history, "restore_tasks", track_task_reader)
             monkeypatch.setattr(markdown_rows._MD, "parse", track_markdown_parser)
             monkeypatch.setattr(app.SessionPanel, "restore_history", track_restore)
+            monkeypatch.setattr(app.os.path, "isdir", track_directory_probe)
 
             frame._resume_history(entry)
             _wait(lambda: frame.notebook.GetPageCount() == 2)
@@ -408,7 +422,13 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
                 ("Question", "Answer")
             ]
             assert panel.task_list.lines() == ["1. To do: Check result"]
-            assert {kind for kind, _thread_id in parser_threads} == {"turns", "tasks", "rows"}
+            assert panel.cwd == (str(directory) if directory_exists else fallback_cwd)
+            assert {kind for kind, _thread_id in parser_threads} == {
+                "turns",
+                "tasks",
+                "rows",
+                "directory",
+            }
             assert all(thread_id != gui_thread for _kind, thread_id in parser_threads)
             assert [row.kind for row in panel._rows] == ["you", "header", "prose"]
         finally:

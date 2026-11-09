@@ -72,6 +72,7 @@ from agent_backends import (
     BACKEND_OPENCODE,
     normalize_backend,
 )
+from hermes_backend import wsl_path_to_windows
 from markdown_rows import Row, parse_response, strip_noise
 from task_list import CLAUDE_TASK_TOOLS, TaskList
 
@@ -136,12 +137,13 @@ class HistoryTurn:
 
 @dataclass
 class HistoryOpenData:
-    """Conversation text and optional task state prepared away from the GUI."""
+    """Conversation contents and working directory prepared away from the GUI."""
 
     turns: list[HistoryTurn]
     tasks: TaskList
     task_warning: str = ""
     rows: Optional[list[Row]] = None
+    resolved_cwd: str = ""  # Empty means use the GUI's current-folder fallback.
 
 
 class HistoryOpenCancelled(Exception):
@@ -2259,7 +2261,20 @@ def prepare_history_open(
         tasks = TaskList()
         warning = "Task list could not be restored."
     _check_cancelled(cancelled)
-    return HistoryOpenData(turns=turns, tasks=tasks, task_warning=warning, rows=rows)
+    resolved_cwd = ""
+    if entry.resumable and entry.cwd:
+        candidate = entry.cwd
+        exists = os.path.isdir(candidate)
+        _check_cancelled(cancelled)
+        if not exists:
+            candidate = wsl_path_to_windows(candidate)
+            exists = os.path.isdir(candidate)
+            _check_cancelled(cancelled)
+        if exists:
+            resolved_cwd = candidate
+    return HistoryOpenData(
+        turns=turns, tasks=tasks, task_warning=warning, rows=rows, resolved_cwd=resolved_cwd
+    )
 
 
 def describe_age(modified: float, now: Optional[float] = None) -> str:

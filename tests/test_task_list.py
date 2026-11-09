@@ -490,3 +490,61 @@ def test_a_finished_step_is_announced_from_the_worker_event():
     )
 
     assert spoken == ["Task done: Ship"]
+
+
+@pytest.mark.parametrize(
+    ("saved_cwd", "available", "expected"),
+    [
+        ("/mnt/z/work", {"Z:\\work"}, "Z:\\work"),
+        ("/missing-project", set(), ""),
+        ("", set(), ""),
+    ],
+)
+def test_prepared_history_resolves_saved_directory(saved_cwd, available, expected, monkeypatch):
+    import session_history
+
+    monkeypatch.setitem(
+        session_history._READERS,
+        "commandcode",
+        lambda _entry: [session_history.HistoryTurn("Question", "Answer")],
+    )
+    real_isdir = session_history.os.path.isdir
+
+    def probe(path):
+        if path in {saved_cwd, "Z:\\work"}:
+            return path in available
+        return real_isdir(path)
+
+    monkeypatch.setattr(session_history.os.path, "isdir", probe)
+    entry = session_history.HistoryEntry("commandcode", "s", "Saved", "", 0, cwd=saved_cwd)
+
+    prepared = session_history.prepare_history_open(entry)
+
+    assert prepared.resolved_cwd == expected
+    assert prepared.task_warning == ""
+
+
+def test_cancellation_after_directory_probe_discards_prepared_opening(monkeypatch):
+    import threading
+
+    import session_history
+
+    cancel = threading.Event()
+    real_isdir = session_history.os.path.isdir
+    monkeypatch.setitem(
+        session_history._READERS,
+        "commandcode",
+        lambda _entry, **_kwargs: [session_history.HistoryTurn("Question", "Answer")],
+    )
+
+    def probe(_path):
+        if _path == "/saved":
+            cancel.set()
+            return True
+        return real_isdir(_path)
+
+    monkeypatch.setattr(session_history.os.path, "isdir", probe)
+    entry = session_history.HistoryEntry("commandcode", "s", "Saved", "", 0, cwd="/saved")
+
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history.prepare_history_open(entry, cancelled=cancel.is_set)
