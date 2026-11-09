@@ -14,7 +14,6 @@ import agent_backends as ab
 import process_utils
 import session_history as history
 from accessible_ai.storage.credentials import CredentialStore
-from task_list import TaskList
 
 
 def _worker(**callbacks):
@@ -317,11 +316,22 @@ def test_desktop_history_opens_for_reading_without_a_cli_session(monkeypatch, wx
     import blindpilot_app as app
 
     entry = history.HistoryEntry("freebuff", "desktop", "Desktop chat", "desktop-v2.db", 1)
-    prepared = lambda _, *, cancelled=None: history.HistoryOpenData(  # noqa: E731
-        [history.HistoryTurn("Question", "Answer")], TaskList()
+    gui_thread = threading.get_ident()
+    text_threads = []
+
+    class TrackedText(str):
+        def strip(self, *args):
+            text_threads.append(threading.get_ident())
+            return super().strip(*args)
+
+    monkeypatch.setitem(
+        history._READERS,
+        "freebuff",
+        lambda _entry, **_kwargs: [
+            history.HistoryTurn(TrackedText("  Question\nmore"), TrackedText("Answer\nline")),
+            history.HistoryTurn(" \n ", TrackedText(" Final ")),
+        ],
     )
-    monkeypatch.setattr(history, "prepare_history_open", prepared)
-    monkeypatch.setattr(app, "prepare_history_open", prepared)
     viewed = []
     monkeypatch.setattr(
         app,
@@ -343,7 +353,27 @@ def test_desktop_history_opens_for_reading_without_a_cli_session(monkeypatch, wx
         wx_app.Yield()
         time.sleep(0.01)
     assert viewed and "read only" in viewed[0][1]
-    assert "Question" in viewed[0][0] and "Answer" in viewed[0][0]
+    assert viewed[0][0] == "You:   Question\nmore\n\nAnswer: Answer\nline\n\nAnswer:  Final "
+    assert text_threads and all(thread != gui_thread for thread in text_threads)
+
+
+def test_cancel_during_read_only_text_preparation_discards_the_result(monkeypatch):
+    cancel = threading.Event()
+
+    class CancelOnFormatting(str):
+        def __format__(self, spec):
+            cancel.set()
+            return super().__format__(spec)
+
+    monkeypatch.setitem(
+        history._READERS,
+        "freebuff",
+        lambda _entry, **_kwargs: [history.HistoryTurn(CancelOnFormatting("Question"), "Answer")],
+    )
+    entry = history.HistoryEntry("freebuff", "desktop", "Desktop chat", "desktop-v2.db", 1)
+
+    with pytest.raises(history.HistoryOpenCancelled):
+        history.prepare_history_open(entry, cancelled=cancel.is_set)
 
 
 def test_chat_discovery_uses_the_terminal_process(monkeypatch, tmp_path):

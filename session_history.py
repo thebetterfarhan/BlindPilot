@@ -144,6 +144,7 @@ class HistoryOpenData:
     task_warning: str = ""
     rows: Optional[list[Row]] = None
     resolved_cwd: str = ""  # Empty means use the GUI's current-folder fallback.
+    read_only_text: str = ""
 
 
 class HistoryOpenCancelled(Exception):
@@ -2233,11 +2234,16 @@ def prepare_history_open(
     turns = load_turns(entry, cancelled=cancelled)
     _check_cancelled(cancelled)
     rows: Optional[list[Row]] = [] if entry.resumable else None
+    read_only_parts: list[str] = []
     response_number = 0
     for turn in turns:
         _check_cancelled(cancelled)
         response_number += 1
         if rows is None:
+            for label, value in (("You", turn.prompt), ("Answer", turn.response)):
+                _check_cancelled(cancelled)
+                if value.strip():
+                    read_only_parts.append(f"{label}: {value}")
             continue
         if turn.prompt.strip():
             rows.append(
@@ -2250,8 +2256,12 @@ def prepare_history_open(
             )
         rows.extend(parse_response(turn.response, response_number))
     _check_cancelled(cancelled)
+    read_only_text = "\n\n".join(read_only_parts)
+    _check_cancelled(cancelled)
     if not turns:
-        return HistoryOpenData(turns=turns, tasks=TaskList(), rows=rows)
+        return HistoryOpenData(
+            turns=turns, tasks=TaskList(), rows=rows, read_only_text=read_only_text
+        )
     try:
         tasks = restore_tasks(entry, strict_errors=True, cancelled=cancelled)
         warning = ""
@@ -2273,7 +2283,12 @@ def prepare_history_open(
         if exists:
             resolved_cwd = candidate
     return HistoryOpenData(
-        turns=turns, tasks=tasks, task_warning=warning, rows=rows, resolved_cwd=resolved_cwd
+        turns=turns,
+        tasks=tasks,
+        task_warning=warning,
+        rows=rows,
+        resolved_cwd=resolved_cwd,
+        read_only_text=read_only_text,
     )
 
 
