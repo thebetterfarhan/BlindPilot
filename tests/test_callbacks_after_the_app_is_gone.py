@@ -69,9 +69,10 @@ def test_a_history_load_finishing_after_the_app_is_gone_is_not_posted(monkeypatc
     queued: list = []
     _gone_app(monkeypatch, queued)
     monkeypatch.setattr(app.threading, "Thread", _Thread)
-    monkeypatch.setattr(app, "list_history", lambda backend, cwd: [])
+    monkeypatch.setattr(app, "list_history", lambda backend=None, cwd=None, *, cancelled=None: [])
     dialog = type("Dialog", (), {})()
     dialog._load_serial = 0
+    dialog._history_cancel = app.threading.Event()
     dialog._loading = True
     dialog._load_error = ""
     dialog._entries = []

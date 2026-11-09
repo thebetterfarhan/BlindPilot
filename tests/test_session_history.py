@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -1141,3 +1142,162 @@ def test_opencode_conversations_are_limited_to_one_directory(home: Path) -> None
 
     assert [entry.title for entry in list_history("opencode", OPENCODE_CWD)] == ["Here"]
     assert sorted(entry.title for entry in list_history("opencode")) == ["Here", "There"]
+
+
+def test_a_cancelled_history_scan_does_not_return_partial_entries(monkeypatch):
+    cancel_event = threading.Event()
+    scanned = []
+    paths = [Path("first.jsonl"), Path("second.jsonl")]
+    fmt = session_history._JsonlFormat(
+        backend="claude",
+        paths=lambda _cwd, cancelled=None: paths,
+        session_of=lambda path, _record: (path.stem, ""),
+        message_of=lambda _record: ("", ""),
+    )
+
+    def entry(_fmt, path, _cwd, *, cancelled=None):
+        scanned.append(path)
+        cancel_event.set()
+        return HistoryEntry("claude", path.stem, path.stem, str(path), 1)
+
+    monkeypatch.setattr(session_history, "_jsonl_entry", entry)
+    monkeypatch.setattr(
+        session_history,
+        "_LISTERS",
+        {
+            "claude": lambda cwd, *, cancelled=None: session_history._jsonl_entries(
+                fmt, cwd, cancelled=cancelled
+            )
+        },
+    )
+
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        list_history("claude", cancelled=cancel_event.is_set)
+
+    assert scanned == paths[:1]
+
+
+def test_a_precancelled_history_list_never_starts_a_lister(monkeypatch):
+    started = []
+
+    def lister(_cwd, *, cancelled=None):
+        started.append(True)
+        return []
+
+    monkeypatch.setattr(session_history, "_LISTERS", {"claude": lister})
+
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        list_history("claude", cancelled=lambda: True)
+
+    assert started == []
+
+
+def test_cancelled_history_list_does_not_start_pending_listers(monkeypatch):
+    backend_names = list(session_history.BACKEND_IDS)[:6]
+    started = []
+    started_four = threading.Event()
+    release = threading.Event()
+    cancelled = threading.Event()
+    finished = threading.Event()
+    failures = []
+    lock = threading.Lock()
+
+    def make_lister(name):
+        def lister(_cwd, *, cancelled=None):
+            with lock:
+                started.append(name)
+                if len(started) == 4:
+                    started_four.set()
+            release.wait(3)
+            session_history._check_cancelled(cancelled)
+            return []
+
+        return lister
+
+    monkeypatch.setattr(
+        session_history,
+        "_LISTERS",
+        {name: make_lister(name) for name in backend_names},
+    )
+
+    def list_in_background():
+        try:
+            list_history(cancelled=cancelled.is_set)
+        except Exception as exc:
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=list_in_background)
+    worker.start()
+    try:
+        assert started_four.wait(3)
+        cancelled.set()
+        release.set()
+        assert finished.wait(3)
+        worker.join(3)
+        assert not worker.is_alive()
+        assert len(started) == 4
+        assert len(failures) == 1
+        assert isinstance(failures[0], session_history.HistoryOpenCancelled)
+    finally:
+        cancelled.set()
+        release.set()
+        worker.join(3)
+
+
+def test_opencode_list_closes_connection_when_cancelled_after_connect(monkeypatch):
+    cancelled = threading.Event()
+    closed = []
+
+    class Connection:
+        def close(self):
+            closed.append(True)
+
+    connection = Connection()
+
+    def connect():
+        cancelled.set()
+        return connection
+
+    monkeypatch.setattr(session_history, "_opencode_connect", connect)
+
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history._opencode_entries(None, cancelled=cancelled.is_set)
+
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("reader", "connector"),
+    [
+        ("_freebuff_desktop_turns", "_hermes_connect"),
+        ("_opencode_turns", "_opencode_connect"),
+    ],
+)
+def test_database_reader_closes_connection_when_cancelled_after_connect(
+    monkeypatch, reader, connector
+):
+    cancelled = threading.Event()
+    closed = []
+
+    class Connection:
+        def execute(self, *_args):
+            return []
+
+        def close(self):
+            closed.append(True)
+
+    connection = Connection()
+
+    def connect(*_args):
+        cancelled.set()
+        return connection
+
+    monkeypatch.setattr(session_history, connector, connect)
+    entry = HistoryEntry("opencode", "session", "title", "database", 1)
+
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        getattr(session_history, reader)(entry, cancelled=cancelled.is_set)
+
+    assert closed == [True]

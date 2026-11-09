@@ -25,6 +25,31 @@ def _patch_load_turns(monkeypatch, loader):
     monkeypatch.setattr(session_history, "load_turns", loader)
 
 
+def _patch_list_history(monkeypatch, lister):
+    # blindpilot_app imported this by value from session_history.
+    monkeypatch.setattr(app, "list_history", lister)
+    monkeypatch.setattr(session_history, "list_history", lister)
+
+
+def _track_threads(monkeypatch):
+    real_thread = threading.Thread
+    threads = []
+
+    def make_thread(*args, **kwargs):
+        thread = real_thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(app.threading, "Thread", make_thread)
+    return threads
+
+
+def _join_threads(threads):
+    for thread in threads:
+        thread.join(3)
+        assert not thread.is_alive()
+
+
 def _capture_preview_dispatch(monkeypatch, dialog, completion_events):
     callbacks = []
     dispatch = app._call_after_alive
@@ -50,7 +75,7 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
     folder = HistoryEntry("claude", "folder", "Old scope", "", 1)
     all_folders = HistoryEntry("claude", "all", "All folders", "", 2)
 
-    def scan(backend, cwd):
+    def scan(backend, cwd, *, cancelled=None):
         threads.append(threading.get_ident())
         if cwd:
             release.wait(3)
@@ -58,7 +83,7 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
             return [folder]
         return [all_folders]
 
-    monkeypatch.setattr(app, "list_history", scan)
+    _patch_list_history(monkeypatch, scan)
     monkeypatch.setattr(app, "announce", lambda *_a, **_k: None)
     dialog = app.HistoryDialog(frame, "claude", ".")
     delivered = []
@@ -81,7 +106,8 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
         _wait(lambda: dialog._shown == [all_folders])
         assert dialog.FindWindow(wx.ID_OK).IsEnabled()
         release.set()
-        _wait(lambda: len(delivered) == 2)
+        _wait(lambda: finished.is_set() and not dialog._loading)
+        assert len(delivered) == 1
         assert dialog._shown == [all_folders]
         assert all(t != threading.get_ident() for t in threads)
     finally:
@@ -91,11 +117,11 @@ def test_slow_history_opens_immediately_and_ignores_the_previous_scope(frame, mo
 
 
 def test_history_loading_failure_is_spoken_and_leaves_no_openable_row(frame, monkeypatch):
-    def scan(*_a):
+    def scan(*_a, **_k):
         raise OSError("History unavailable")
 
     spoken = []
-    monkeypatch.setattr(app, "list_history", scan)
+    _patch_list_history(monkeypatch, scan)
     monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
     try:
@@ -108,41 +134,43 @@ def test_history_loading_failure_is_spoken_and_leaves_no_openable_row(frame, mon
         dialog.Destroy()
 
 
-def test_closing_during_loading_discards_the_result(frame, monkeypatch):
+def test_closing_during_loading_cancels_the_scan(frame, monkeypatch):
+    threads = _track_threads(monkeypatch)
     release = threading.Event()
+    cancelled_read = []
 
-    def scan(*_a):
+    def scan(*_a, cancelled=None, **_k):
         release.wait(3)
+        cancelled_read.append(cancelled is not None and cancelled())
         return [HistoryEntry("claude", "late", "Late result", "", 1)]
 
     spoken = []
-    monkeypatch.setattr(app, "list_history", scan)
+    _patch_list_history(monkeypatch, scan)
     monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
-    delivered = threading.Event()
-    loaded = dialog._history_loaded
-
-    def receive(*args):
-        loaded(*args)
-        delivered.set()
-
-    monkeypatch.setattr(dialog, "_history_loaded", receive)
-    dialog.Destroy()
-    _wait(lambda: not dialog)
-    release.set()
-    _wait(delivered.is_set)
-    # A callback on a destroyed wx object must not update controls or speak.
-    assert spoken == []
+    history_cancel = dialog._history_cancel
+    try:
+        dialog.Destroy()
+        assert history_cancel is not None and history_cancel.is_set()
+        release.set()
+        _join_threads(threads)
+        assert cancelled_read == [True]
+        assert spoken == []
+    finally:
+        release.set()
+        _join_threads(threads)
+        if dialog:
+            dialog.Destroy()
 
 
 def test_a_queued_result_is_ignored_while_native_destruction_is_deferred(frame, monkeypatch):
     release = threading.Event()
 
-    def scan(*_a):
+    def scan(*_a, **_k):
         release.wait(3)
         return []
 
-    monkeypatch.setattr(app, "list_history", scan)
+    _patch_list_history(monkeypatch, scan)
     spoken = []
     monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
     dialog = app.HistoryDialog(frame, "claude", ".")
@@ -164,7 +192,7 @@ def test_a_queued_result_is_ignored_while_native_destruction_is_deferred(frame, 
 def test_preview_aba_ignores_late_old_result_and_cancels_obsolete_reads(
     frame, monkeypatch, old_result
 ):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
+    _patch_list_history(monkeypatch, lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, "claude", ".")
     release_old = threading.Event()
     release_middle = threading.Event()
@@ -239,7 +267,7 @@ def test_preview_aba_ignores_late_old_result_and_cancels_obsolete_reads(
 
 
 def test_preview_completion_after_selection_clear_is_ignored(frame, monkeypatch):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
+    _patch_list_history(monkeypatch, lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, "claude", ".")
     queued = threading.Event()
     callbacks = []
@@ -268,7 +296,7 @@ def test_preview_completion_after_selection_clear_is_ignored(frame, monkeypatch)
 
 
 def test_preview_completion_queued_before_destroy_is_ignored(frame, monkeypatch):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
+    _patch_list_history(monkeypatch, lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, "claude", ".")
     queued = threading.Event()
     callbacks = []
@@ -301,7 +329,7 @@ def test_preview_completion_queued_before_destroy_is_ignored(frame, monkeypatch)
     [("current A", "current A"), (OSError("current failure"), "Could not read this conversation.")],
 )
 def test_current_preview_success_and_error_are_unchanged(frame, monkeypatch, turns, expected):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
+    _patch_list_history(monkeypatch, lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, "claude", ".")
     queued = threading.Event()
     callbacks = []
@@ -332,7 +360,7 @@ def test_current_preview_success_and_error_are_unchanged(frame, monkeypatch, tur
 
 
 def test_preview_reader_cancellation_is_silent(frame, monkeypatch):
-    monkeypatch.setattr(app, "list_history", lambda *_a: [])
+    _patch_list_history(monkeypatch, lambda *_a, **_k: [])
     dialog = app.HistoryDialog(frame, "claude", ".")
     finished = threading.Event()
     queued = []
@@ -359,3 +387,90 @@ def test_preview_reader_cancellation_is_silent(frame, monkeypatch):
         assert dialog.preview.GetValue() == "Reading…"
     finally:
         dialog.Destroy()
+
+
+@pytest.mark.parametrize("old_result", ["success", "error"])
+def test_history_reload_cancels_obsolete_scan_without_changing_current_results(
+    frame, monkeypatch, old_result
+):
+    threads = _track_threads(monkeypatch)
+    old_started = threading.Event()
+    old_release = threading.Event()
+    old_done = threading.Event()
+    calls = []
+    stale = HistoryEntry("claude", "old", "Old result", "", 2)
+    current = HistoryEntry("claude", "current", "Current result", "", 1)
+    spoken = []
+
+    def scan(backend=None, cwd=None, *, cancelled=None):
+        index = len(calls)
+        calls.append(cancelled)
+        if index == 0:
+            old_started.set()
+            try:
+                assert old_release.wait(3)
+                if old_result == "error":
+                    raise OSError("obsolete scan failed")
+                return [stale]
+            finally:
+                old_done.set()
+        return [current]
+
+    _patch_list_history(monkeypatch, scan)
+    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    dialog = app.HistoryDialog(frame, "claude", ".")
+    try:
+        assert old_started.wait(3)
+        old_cancelled = calls[0]
+        dialog.scope_picker.SetSelection(1)
+        dialog._reload()
+        _wait(lambda: dialog._shown == [current])
+        assert old_cancelled is not None and old_cancelled()
+        old_release.set()
+        assert old_done.wait(3)
+        _join_threads(threads)
+        assert dialog._shown == [current]
+        assert "obsolete scan failed" not in dialog.summary.GetLabel()
+        assert not any("obsolete scan failed" in message for message in spoken)
+    finally:
+        old_release.set()
+        _join_threads(threads)
+        dialog.Destroy()
+
+
+def test_destroy_cancels_history_scan_and_suppresses_its_error(frame, monkeypatch):
+    threads = _track_threads(monkeypatch)
+    started = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+    cancelled_read = []
+    spoken = []
+
+    def scan(backend=None, cwd=None, *, cancelled=None):
+        started.set()
+        try:
+            assert release.wait(3)
+            cancelled_read.append(cancelled is not None and cancelled())
+            session_history._check_cancelled(cancelled)
+            raise OSError("should not reach this point")
+        finally:
+            done.set()
+
+    _patch_list_history(monkeypatch, scan)
+    monkeypatch.setattr(app, "announce", lambda text, **_k: spoken.append(text))
+    dialog = app.HistoryDialog(frame, "claude", ".")
+    history_cancel = dialog._history_cancel
+    try:
+        dialog.Destroy()
+        assert started.wait(3)
+        assert history_cancel is not None and history_cancel.is_set()
+        release.set()
+        assert done.wait(3)
+        _join_threads(threads)
+        assert cancelled_read == [True]
+        assert spoken == []
+    finally:
+        release.set()
+        _join_threads(threads)
+        if dialog:
+            dialog.Destroy()

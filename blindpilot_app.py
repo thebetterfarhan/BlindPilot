@@ -5695,6 +5695,7 @@ class HistoryDialog(wx.Dialog):
         self._shown: List[HistoryEntry] = []
         self.entry: Optional[HistoryEntry] = None
         self._load_serial = 0
+        self._history_cancel: Optional[threading.Event] = None
         self._loading = False
         self._load_error = ""
 
@@ -5880,6 +5881,10 @@ class HistoryDialog(wx.Dialog):
     def _reload(self) -> None:
         """Re-scan the history stores for the chosen backend and scope."""
         backend, cwd = self._selected_backend(), self._selected_cwd()
+        if self._history_cancel is not None:
+            self._history_cancel.set()
+        cancel = threading.Event()
+        self._history_cancel = cancel
         self._load_serial += 1
         serial = self._load_serial
         self._loading = True
@@ -5889,9 +5894,15 @@ class HistoryDialog(wx.Dialog):
 
         def work() -> None:
             try:
-                entries, error = list_history(backend, cwd), ""
+                entries, error = list_history(backend, cwd, cancelled=cancel.is_set), ""
+            except HistoryOpenCancelled:
+                return
             except Exception as exc:
+                if cancel.is_set():
+                    return
                 entries, error = [], f"Could not load conversations: {exc}"
+            if cancel.is_set():
+                return
             _call_after_alive(self._history_loaded, serial, entries, error)
 
         threading.Thread(target=work, daemon=True).start()
@@ -5908,6 +5919,9 @@ class HistoryDialog(wx.Dialog):
     def Destroy(self) -> bool:  # type: ignore[override]
         # Cocoa may defer native destruction past an already queued callback.
         self._load_serial += 1
+        if self._history_cancel is not None:
+            self._history_cancel.set()
+            self._history_cancel = None
         self._preview_timer.Stop()
         if self._preview_cancel is not None:
             self._preview_cancel.set()
