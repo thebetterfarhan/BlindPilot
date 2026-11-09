@@ -3,11 +3,13 @@
 
 import json
 import sys
+import threading
 import time
 
 import agent_backends
 import blindpilot_app
 import museai_backend
+import markdown_rows
 import pytest
 import session_history
 import wx
@@ -91,6 +93,15 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
         frame = _frame(monkeypatch, tmp_path)
         try:
             _chats, calls = _gateway(monkeypatch, tmp_path)
+            gui_thread = threading.get_ident()
+            parse_threads = []
+            original_parse = markdown_rows._MD.parse
+
+            def track_parse(*args, **kwargs):
+                parse_threads.append(threading.get_ident())
+                return original_parse(*args, **kwargs)
+
+            monkeypatch.setattr(markdown_rows._MD, "parse", track_parse)
             previous = frame.notebook.GetCurrentPage()
             previous.prompt.SetValue("Keep this draft")
             loaded = []
@@ -124,6 +135,7 @@ def test_discuss_prepares_main_chat_draft_and_preserves_another_tabs_prompt(monk
             assert panel is not previous and panel._session_id == "main"
             assert panel.prompt.GetValue() == "Article context\nMy question: "
             assert previous.prompt.GetValue() == "Keep this draft"
+            assert parse_threads and all(thread != gui_thread for thread in parse_threads)
             assert not any(call[0] in {"send", "session-start"} for call in calls)
         finally:
             frame.Destroy()
@@ -149,6 +161,15 @@ def test_switching_to_museai_loads_main_and_new_conversation_still_starts_a_side
         frame = _frame(monkeypatch, tmp_path)
         try:
             _chats, calls = _gateway(monkeypatch, tmp_path)
+            gui_thread = threading.get_ident()
+            parse_threads = []
+            original_parse = markdown_rows._MD.parse
+
+            def track_parse(*args, **kwargs):
+                parse_threads.append(threading.get_ident())
+                return original_parse(*args, **kwargs)
+
+            monkeypatch.setattr(markdown_rows._MD, "parse", track_parse)
             monkeypatch.setattr(frame, "_announce_setting", lambda _text: None)
             frame._set_backend("museai")
             panel = frame.notebook.GetCurrentPage()
@@ -156,6 +177,7 @@ def test_switching_to_museai_loads_main_and_new_conversation_still_starts_a_side
             assert panel._session_id == "main"
             assert [(t.prompt, t.response) for t in panel._turns] == [("Remember me?", "Yes.")]
             assert "Main chat" in frame.notebook.GetPageText(frame.notebook.GetSelection())
+            assert parse_threads and all(thread != gui_thread for thread in parse_threads)
             assert not any(call[0] in {"send", "session-start"} for call in calls)
 
             panel.clear_conversation()

@@ -7384,15 +7384,16 @@ class SessionPanel(wx.Panel):
                 if not session:
                     raise ValueError("Check your sign-in.")
                 entry = HistoryEntry(BACKEND_MUSEAI, session, "Main chat", "", 0, folder="muse.ai")
-                turns = load_turns(entry)
+                prepared = prepare_history_open(entry)
+                turns, rows = prepared.turns, prepared.rows
                 error = ""
             except Exception as exc:
-                entry, turns, error = None, [], str(exc)
-            _call_after_alive(self._museai_main_loaded, serial, entry, turns, error)
+                entry, turns, rows, error = None, [], None, str(exc)
+            _call_after_alive(self._museai_main_loaded, serial, entry, turns, error, rows)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _museai_main_loaded(self, serial: int, entry, turns, error: str) -> None:
+    def _museai_main_loaded(self, serial: int, entry, turns, error: str, rows=None) -> None:
         if not self or serial != self._museai_main_serial:
             return
         self._museai_main_loading = False
@@ -7408,7 +7409,7 @@ class SessionPanel(wx.Panel):
         self._museai_pending_send = False
         self._museai_main_required = False
         self.model = self.effort = self._cli_model = self._cli_effort = ""
-        self.restore_history(entry, turns, tasks=TaskList())
+        self.restore_history(entry, turns, tasks=TaskList(), rows=rows)
         if resume_pending:
             _call_after_alive(self._send_museai_pending, self._museai_main_serial)
 
@@ -15039,17 +15040,20 @@ class MainFrame(wx.Frame):
                     folder="muse.ai",
                     cwd="",
                 )
-                turns = load_turns(entry)
+                prepared = prepare_history_open(entry)
+                turns, rows = prepared.turns, prepared.rows
                 error = ""
             except Exception as exc:
-                entry, turns, session, error = None, [], None, str(exc)
+                entry, turns, rows, session, error = None, [], None, None, str(exc)
             _call_after_alive(
-                self._museai_chat_loaded, serial, kind, value, entry, turns, session, error
+                self._museai_chat_loaded, serial, kind, value, entry, turns, session, error, rows
             )
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _museai_chat_loaded(self, serial, kind, value, entry, turns, session, error) -> None:
+    def _museai_chat_loaded(
+        self, serial, kind, value, entry, turns, session, error, rows=None
+    ) -> None:
         if not self or serial != getattr(self, "_museai_active_serial", 0):
             return
         if error or entry is None:
@@ -15057,7 +15061,7 @@ class MainFrame(wx.Frame):
             self._announce_setting(message)
             return
         panel = self._add_session(self._history_cwd(), open_main_chat=False)
-        panel.restore_history(entry, turns, tasks=TaskList())
+        panel.restore_history(entry, turns, tasks=TaskList(), rows=rows)
         self._follow_tab_backend()
         if kind == "draft":
             panel.prompt.SetValue(value)
