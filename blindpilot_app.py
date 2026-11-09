@@ -10034,6 +10034,7 @@ class SessionPanel(wx.Panel):
         turns: List[HistoryTurn],
         *,
         tasks: TaskList | None = None,
+        rows: List[Row] | None = None,
     ) -> None:
         """Put a past conversation back in this tab, ready to be continued.
 
@@ -10077,19 +10078,24 @@ class SessionPanel(wx.Panel):
         self._stream_response = None
         self._streamed_assistant = ""
         self._assistant_narrated_this_turn = False
-        for turn in turns:
-            self._response_count += 1
-            number = self._response_count
-            if turn.prompt.strip():
-                self._rows.append(
-                    Row(
-                        kind="you",
-                        label=f"You: {' '.join(turn.prompt.split())}",
-                        payload=turn.prompt,
-                        response_number=number,
+        if rows is None:
+            # Legacy/direct callers still prepare their rows synchronously.
+            for turn in turns:
+                self._response_count += 1
+                number = self._response_count
+                if turn.prompt.strip():
+                    self._rows.append(
+                        Row(
+                            kind="you",
+                            label=f"You: {' '.join(turn.prompt.split())}",
+                            payload=turn.prompt,
+                            response_number=number,
+                        )
                     )
-                )
-            self._rows.extend(parse_response(turn.response, number))
+                self._rows.extend(parse_response(turn.response, number))
+        else:
+            self._rows.extend(rows)
+            self._response_count = len(turns)
         self._refresh_list()
         self._on_title(self, entry.title)
         # Picks up the restored session: relabels the backend line, and gives
@@ -16258,7 +16264,7 @@ class MainFrame(wx.Frame):
         # restore_history reports the conversation's name, which is what
         # renames the tab: that title is what tells this conversation apart
         # from the others open in the same folder.
-        panel.restore_history(entry, turns, tasks=prepared.tasks)
+        panel.restore_history(entry, turns, tasks=prepared.tasks, rows=prepared.rows)
         # The resumed tab took the conversation's own backend.
         self._follow_tab_backend()
         responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"

@@ -7,6 +7,7 @@ import json
 
 import blindpilot_app as app
 import session_history
+import markdown_rows
 import wx
 import pytest
 from task_list import TaskList
@@ -339,6 +340,7 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
             path = tmp_path / "saved.jsonl"
             records = [
                 {"type": "user", "message": {"role": "user", "content": "Question"}},
+                {"type": "assistant", "message": {"role": "assistant", "content": "Answer"}},
                 {
                     "type": "assistant",
                     "message": {
@@ -371,6 +373,7 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
             entry = session_history.HistoryEntry("claude", "saved", "Saved chat", str(path), 1)
             gui_thread = threading.get_ident()
             parser_threads = []
+            real_restore = app.SessionPanel.restore_history
             real_reader = session_history._READERS["claude"]
             real_restore_tasks = session_history.restore_tasks
 
@@ -382,17 +385,32 @@ def test_real_turn_and_task_parsers_run_on_opening_worker(monkeypatch, tmp_path)
                 parser_threads.append(("tasks", threading.get_ident()))
                 return real_restore_tasks(chosen, strict_errors=strict_errors, cancelled=cancelled)
 
+            real_markdown_parse = markdown_rows._MD.parse
+
+            def track_markdown_parser(*args, **kwargs):
+                parser_threads.append(("rows", threading.get_ident()))
+                return real_markdown_parse(*args, **kwargs)
+
+            def track_restore(panel, chosen, turns, *, tasks=None, rows=None):
+                assert rows is not None
+                return real_restore(panel, chosen, turns, tasks=tasks, rows=rows)
+
             monkeypatch.setitem(session_history._READERS, "claude", track_turn_reader)
             monkeypatch.setattr(session_history, "restore_tasks", track_task_reader)
+            monkeypatch.setattr(markdown_rows._MD, "parse", track_markdown_parser)
+            monkeypatch.setattr(app.SessionPanel, "restore_history", track_restore)
 
             frame._resume_history(entry)
             _wait(lambda: frame.notebook.GetPageCount() == 2)
 
             panel = frame.notebook.GetCurrentPage()
-            assert [(turn.prompt, turn.response) for turn in panel._turns] == [("Question", "")]
+            assert [(turn.prompt, turn.response) for turn in panel._turns] == [
+                ("Question", "Answer")
+            ]
             assert panel.task_list.lines() == ["1. To do: Check result"]
-            assert {kind for kind, _thread_id in parser_threads} == {"turns", "tasks"}
+            assert {kind for kind, _thread_id in parser_threads} == {"turns", "tasks", "rows"}
             assert all(thread_id != gui_thread for _kind, thread_id in parser_threads)
+            assert [row.kind for row in panel._rows] == ["you", "header", "prose"]
         finally:
             progress = getattr(frame, "_history_open_progress", None)
             if progress:
