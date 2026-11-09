@@ -1985,7 +1985,7 @@ def _opencode_turns(
         # first and the turns folded second; a message of bare files still
         # reads back as a turn, the way a paths-in-text backend replays one.
         names: dict[str, list[str]] = {}
-        texts: list[tuple[str, str, str]] = []
+        texts: dict[str, list[str]] = {}
         for message_id, data in connection.execute(
             "SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created LIMIT ?",
             (entry.session_id, _MAX_TRANSCRIPT_PARTS),
@@ -2011,24 +2011,18 @@ def _opencode_turns(
                 continue
             text = str(part.get("text") or "").strip()
             if text:
-                texts.append((str(message_id), role, text))
-        mentioned: set[str] = set()
-        for message_id, role, text in texts:
+                texts.setdefault(str(message_id), []).append(text)
+        for message_id, role in roles.items():
             _check_cancelled(cancelled)
+            text = "\n\n".join(texts.get(message_id, []))
             if role == "user":
-                cleaned = clean_user_text(text)
-                cleaned = _with_attached(cleaned, names.get(message_id, []))
-                mentioned.add(message_id)
+                cleaned = _with_attached(clean_user_text(text), names.get(message_id, []))
                 if cleaned:
                     turns.append(HistoryTurn(prompt=cleaned))
-                continue
-            if not turns:
-                turns.append(HistoryTurn())
-            turns[-1].response = _append(turns[-1].response, text)
-        for message_id, files in names.items():
-            _check_cancelled(cancelled)
-            if message_id not in mentioned and files:
-                turns.append(HistoryTurn(prompt=_with_attached("", files)))
+            elif role == "assistant" and text:
+                if not turns:
+                    turns.append(HistoryTurn())
+                turns[-1].response = _append(turns[-1].response, text)
     except sqlite3.Error:
         _check_cancelled(cancelled)
         return turns

@@ -175,6 +175,7 @@ def test_a_link_only_ever_reopens_a_conversation(monkeypatch):
     opened: list = []
     stub._linked_lookup_serial = 1
     stub._resume_history = opened.append
+    stub._session_link_finished = lambda: None
     app.MainFrame._open_linked(stub, 1, None)
     assert spoken[-1].startswith("The conversation that link names was not found")
     assert opened == []

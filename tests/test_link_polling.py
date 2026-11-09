@@ -162,3 +162,52 @@ def test_invalid_utf8_handoff_does_not_block_other_links(monkeypatch, tmp_path):
     monkeypatch.setattr(app, "_links_dir", lambda: tmp_path)
     assert app.take_handed_links() == ["blindpilot://open/codex/valid"]
     assert not (tmp_path / "valid.link").exists()
+
+
+@pytest.mark.parametrize("first_result", ["success", "unreadable", "cancel"])
+def test_queued_links_wait_for_history_open_and_continue_after_failure(
+    monkeypatch, tmp_path, first_result
+):
+    import session_history
+
+    entries = [session_history.HistoryEntry("codex", name, name, "", 0) for name in ("one", "two")]
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    lookups = []
+
+    def history(backend, cwd, limit):
+        lookups.append(True)
+        return entries
+
+    def reader(entry, **kwargs):
+        if entry.session_id == "one":
+            entered.set()
+            try:
+                release.wait(3)
+                if first_result == "unreadable":
+                    return []
+            finally:
+                finished.set()
+        return [session_history.HistoryTurn("Question", "Answer")]
+
+    monkeypatch.setattr(app, "list_history", history)
+    monkeypatch.setattr(session_history, "list_history", history)
+    monkeypatch.setitem(session_history._READERS, "codex", reader)
+    with _running_app():
+        frame = _frame(monkeypatch, tmp_path)
+        try:
+            frame.open_session_link("blindpilot://open/codex/one")
+            frame.open_session_link("blindpilot://open/codex/two")
+            _wait(lambda: entered.is_set())
+            assert len(lookups) == 1
+            if first_result == "cancel":
+                frame._cancel_history_open(frame._history_open_serial)
+            release.set()
+            _wait(lambda: not frame._session_link_active and not frame._session_link_queue)
+            opened = [panel._session_id for panel in frame._session_panels() if panel._session_id]
+            assert opened == (["one", "two"] if first_result == "success" else ["two"])
+        finally:
+            release.set()
+            if entered.is_set():
+                assert finished.wait(3)
+            wx.GetApp().Yield()
+            frame.Destroy()

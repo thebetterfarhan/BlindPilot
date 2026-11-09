@@ -194,3 +194,28 @@ def test_the_submenu_is_greyed_out_while_the_master_switch_is_off(frame, monkeyp
         assert not any(item.IsEnabled() for item in menu.GetMenuItems())
     finally:
         menu.Destroy()
+
+
+def test_stop_during_player_creation_still_reaps_the_killed_process(monkeypatch, tmp_path):
+    import threading
+    import earcons
+
+    stop = threading.Event()
+    events = []
+    box = earcons.Earcons(str(tmp_path))
+    monkeypatch.setattr(box, "_unix_player", lambda: ["fake-player"])
+
+    class Player:
+        def kill(self):
+            events.append("kill")
+
+        def wait(self):
+            events.append("wait")
+
+    def start(*args, **kwargs):
+        stop.set()
+        return Player()
+
+    monkeypatch.setattr(earcons.subprocess, "Popen", start)
+    box._loop_unix(stop)
+    assert events == ["kill", "wait"]
