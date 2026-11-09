@@ -317,7 +317,7 @@ def test_desktop_history_opens_for_reading_without_a_cli_session(monkeypatch, wx
     import blindpilot_app as app
 
     entry = history.HistoryEntry("freebuff", "desktop", "Desktop chat", "desktop-v2.db", 1)
-    prepared = lambda _: history.HistoryOpenData(  # noqa: E731
+    prepared = lambda _, *, cancelled=None: history.HistoryOpenData(  # noqa: E731
         [history.HistoryTurn("Question", "Answer")], TaskList()
     )
     monkeypatch.setattr(history, "prepare_history_open", prepared)

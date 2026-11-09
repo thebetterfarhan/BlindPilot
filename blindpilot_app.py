@@ -181,6 +181,7 @@ from markdown_rows import (
 )
 from session_history import (
     HistoryEntry,
+    HistoryOpenCancelled,
     HistoryTurn,
     claude_project_slug,
     describe_age,
@@ -16111,9 +16112,11 @@ class MainFrame(wx.Frame):
         if old_cancel is not None:
             old_cancel.set()
         old_progress = getattr(self, "_history_open_progress", None)
+        self._history_open_progress = None
+        self._history_open_message = None
+        self._history_open_cancel_button = None
         if old_progress is not None:
             old_progress.Destroy()
-            self._history_open_progress = None
         serial = getattr(self, "_history_open_serial", 0) + 1
         self._history_open_serial = serial
         cancel = threading.Event()
@@ -16123,10 +16126,14 @@ class MainFrame(wx.Frame):
 
         def work() -> None:
             try:
-                prepared = prepare_history_open(entry)
+                prepared = prepare_history_open(entry, cancelled=cancel.is_set)
                 error = ""
+            except HistoryOpenCancelled:
+                prepared, error = None, ""
             except Exception as exc:
                 prepared, error = None, str(exc)
+            if cancel.is_set():
+                return
             _call_after_alive(
                 self._history_open_loaded, serial, cancel, entry, prepared, error, on_open
             )
@@ -16170,8 +16177,6 @@ class MainFrame(wx.Frame):
 
         def close(event) -> None:
             self._cancel_history_open(serial)
-            if self._history_open_progress is progress:
-                self._history_open_progress = None
             event.Skip()
 
         _bind_gui(progress, wx.EVT_CLOSE, close)
@@ -16183,14 +16188,23 @@ class MainFrame(wx.Frame):
         if not self or serial != self._history_open_serial:
             return
         cancel = self._history_open_cancel
-        if cancel is not None:
-            cancel.set()
-        if self._history_open_message is not None:
-            self._history_open_message.SetLabel(
-                "Cancelling; the loaded conversation will be discarded"
-            )
-        if self._history_open_cancel_button is not None:
-            self._history_open_cancel_button.Disable()
+        if cancel is None:
+            return
+        cancel.set()
+        progress = self._history_open_progress
+        self._history_open_serial += 1
+        self._history_open_cancel = None
+        self._history_open_progress = None
+        self._history_open_message = None
+        self._history_open_cancel_button = None
+        if progress is not None:
+            progress.Destroy()
+        announce("Opening conversation cancelled")
+
+    def _announce_history_open_if_current(self, serial, cancel, text) -> None:
+        if not self or serial != self._history_open_serial or cancel.is_set():
+            return
+        announce(text)
 
     def _history_open_loaded(self, serial, cancel, entry, prepared, error, on_open) -> None:
         if not self or serial != self._history_open_serial:
@@ -16248,9 +16262,19 @@ class MainFrame(wx.Frame):
         # The resumed tab took the conversation's own backend.
         self._follow_tab_backend()
         responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"
-        wx.CallAfter(announce, f"Resumed {entry.title}, {responses}")
+        wx.CallAfter(
+            self._announce_history_open_if_current,
+            serial,
+            cancel,
+            f"Resumed {entry.title}, {responses}",
+        )
         if prepared.task_warning:
-            wx.CallAfter(announce, prepared.task_warning)
+            wx.CallAfter(
+                self._announce_history_open_if_current,
+                serial,
+                cancel,
+                prepared.task_warning,
+            )
         if on_open:
             on_open(panel)
 
@@ -16975,6 +16999,17 @@ class MainFrame(wx.Frame):
                 refresh()
 
     def _on_close(self, event: wx.CloseEvent) -> None:
+        history_cancel = getattr(self, "_history_open_cancel", None)
+        if history_cancel is not None:
+            history_cancel.set()
+        self._history_open_serial = getattr(self, "_history_open_serial", 0) + 1
+        self._history_open_cancel = None
+        history_progress = getattr(self, "_history_open_progress", None)
+        self._history_open_progress = None
+        self._history_open_message = None
+        self._history_open_cancel_button = None
+        if history_progress is not None:
+            history_progress.Destroy()
         self._agent_files_serial = getattr(self, "_agent_files_serial", 0) + 1
         self._desktop_shortcut_serial = getattr(self, "_desktop_shortcut_serial", 0) + 1
         timer = getattr(self, "_links_timer", None)

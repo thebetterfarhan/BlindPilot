@@ -10,6 +10,7 @@ older TodoWrite; Codex sends its whole plan as ``turn/plan/updated``.
 from __future__ import annotations
 
 import blindpilot_app as app
+import pytest
 from task_list import TaskList
 
 
@@ -172,6 +173,127 @@ def test_prepared_history_contains_turns_and_replayed_tasks(tmp_path):
     assert [(turn.prompt, turn.response) for turn in prepared.turns] == [("Ship this", "Done.")]
     assert prepared.tasks.lines() == ["1. To do: Verify the release"]
     assert prepared.task_warning == ""
+
+
+def test_jsonl_reader_stops_on_cancellation_and_closes_file(monkeypatch, tmp_path):
+    import session_history
+    from pathlib import Path
+
+    path = tmp_path / "records.jsonl"
+    path.write_text('{"n": 1}\n\nnot-json\n{"n": 2}\n', encoding="utf-8")
+    opened = []
+    read_count = 0
+    real_open = Path.open
+
+    class TrackedFile:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            opened.append(self)
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def __iter__(self):
+            return self.handle
+
+        def readline(self):
+            nonlocal read_count
+            read_count += 1
+            return self.handle.readline()
+
+        @property
+        def closed(self):
+            return self.handle.closed
+
+    monkeypatch.setattr(
+        Path, "open", lambda chosen, *a, **kw: TrackedFile(real_open(chosen, *a, **kw))
+    )
+    cancelled = False
+    records = session_history._iter_jsonl(path, cancelled=lambda: cancelled)
+    assert next(records) == {"n": 1}
+    cancelled = True
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        next(records)
+    assert len(opened) == 1
+    assert opened[0].closed
+    assert read_count == 1
+
+
+def test_pre_cancelled_history_read_has_distinct_outcome(tmp_path):
+    import session_history
+
+    path = tmp_path / "records.jsonl"
+    path.write_text('{"type":"user","message":{"content":"Hi"}}\n', encoding="utf-8")
+    entry = session_history.HistoryEntry("claude", "s", "title", str(path), 0.0)
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history.prepare_history_open(entry, cancelled=lambda: True)
+
+
+def test_task_replay_cancellation_is_not_reported_as_optional_failure(tmp_path, monkeypatch):
+    import json
+
+    import session_history
+
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Question"}},
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "task-1",
+                        "name": "TaskCreate",
+                        "input": {"subject": "Check"},
+                    }
+                ]
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "task-1", "content": "Task #1 created"}
+                ]
+            },
+        },
+        {"type": "assistant", "message": {"content": "Answer"}},
+    ]
+    path = tmp_path / "tasks.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    entry = session_history.HistoryEntry("claude", "s", "title", str(path), 0.0)
+    cancelled = False
+    original_apply = TaskList.apply_claude
+
+    def apply_and_cancel(self, *args, **kwargs):
+        nonlocal cancelled
+        result = original_apply(self, *args, **kwargs)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(TaskList, "apply_claude", apply_and_cancel)
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history.prepare_history_open(entry, cancelled=lambda: cancelled)
+
+
+def test_cancelled_reader_result_is_not_empty_success(monkeypatch, tmp_path):
+    import session_history
+
+    stopped = False
+
+    def reader(_entry, *, cancelled=None):
+        nonlocal stopped
+        stopped = True
+        return []
+
+    monkeypatch.setitem(session_history._READERS, "claude", reader)
+    entry = session_history.HistoryEntry("claude", "s", "title", str(tmp_path / "none"), 0.0)
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history.load_turns(entry, cancelled=lambda: stopped)
 
 
 def test_prepared_history_keeps_text_when_task_transcript_disappears(tmp_path, monkeypatch):
