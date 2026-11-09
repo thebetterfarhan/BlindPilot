@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import sqlite3
 import threading
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from typing import Any, Sequence
@@ -142,6 +143,9 @@ class ChatPanel(wx.Panel):
         self.generation_cancel: Event | None = None
         self.generating = False
         self._unsaved_response: Message | None = None
+        self._response_save_running = False
+        self._save_retry_requested = False
+        self._regeneration_history: list[Message] | None = None
         self.assistant_buffer = ""
         # The thinking a reasoning model does, kept apart from its answer, and
         # the History entry it is being written into for this turn.
@@ -182,6 +186,7 @@ class ChatPanel(wx.Panel):
 
     def shutdown(self) -> None:
         self.closing = True
+        self._save_retry_requested = False
         self._cancel_attachment_load()
         self._cancel_response_announcement_timer()
         self.assistant_announcement_buffer = ""
@@ -1059,6 +1064,7 @@ class ChatPanel(wx.Panel):
         enabled = (
             not self.generating
             and not self._attachments_loading
+            and self._unsaved_response is None
             and self._last_assistant_message() is not None
         )
         self.regenerate_button.Enable(enabled)
@@ -1073,15 +1079,21 @@ class ChatPanel(wx.Panel):
         )
 
     def _render_conversation(
-        self, exclude_message_id: int | None = None, add_assistant_heading: bool = False
-    ) -> None:
+        self,
+        exclude_message_id: int | None = None,
+        add_assistant_heading: bool = False,
+        *,
+        messages: list[Message] | None = None,
+    ) -> list[Message]:
         if self.current_conversation_id is None:
             self._replace_history_text("")
             self._replace_history_entries([])
-            return
+            return []
         rendered: list[str] = []
         history_entries: list[Message] = []
-        for message in self.db.list_messages(self.current_conversation_id):
+        if messages is None:
+            messages = self.db.list_messages(self.current_conversation_id)
+        for message in messages:
             if message.id == exclude_message_id:
                 continue
             label = self._history_role_label(message.role)
@@ -1100,6 +1112,7 @@ class ChatPanel(wx.Panel):
             )
         self._replace_history_text("\r\n\r\n".join(rendered))
         self._replace_history_entries(history_entries)
+        return messages
 
     def _history_review_selection(self) -> tuple[int, int] | None:
         if not self.transcript.HasFocus():
@@ -1237,7 +1250,7 @@ class ChatPanel(wx.Panel):
         settings = self._generation_settings(
             account, model, exclude_message_id=self.regenerating_message_id
         )
-        self._render_conversation(
+        self._regeneration_history = self._render_conversation(
             exclude_message_id=self.regenerating_message_id, add_assistant_heading=True
         )
         self._start_generation(account, model, settings, regenerating=True)
@@ -1471,24 +1484,60 @@ class ChatPanel(wx.Panel):
         message = self._unsaved_response
         if message is None:
             return True
-        new_message = message.id is None
-        try:
-            if new_message:
-                self.db.add_message(message)
-            else:
-                self.db.update_message_content(int(message.id), message.content)
-        except (sqlite3.Error, OSError):
-            if new_message:
-                # add_message assigns an id before its transaction commits.
-                message.id = None
+        if not self.generating:
+            self._save_retry_requested = True
+            text = "Saving response. Try the action again after it has been saved."
+            self.SetStatusText(text)
+            self._speak(text)
+        if self._response_save_running:
+            return False
+        self._response_save_running = True
+        saved = replace(message)
+        db = self.db
+
+        def work() -> None:
+            failed = False
+            try:
+                if saved.id is None:
+                    db.add_message(saved)
+                else:
+                    db.update_message_content(saved.id, saved.content)
+            except (sqlite3.Error, OSError):
+                failed = True
+            if not self.closing:
+                wx.CallAfter(self._response_saved, message, saved.id, failed)
+
+        # A bounded SQLite write can finish after the window closes.
+        threading.Thread(target=work, daemon=False).start()
+        return False
+
+    def _response_saved(self, message: Message, saved_id: int | None, failed: bool) -> None:
+        if not self or self.closing or message is not self._unsaved_response:
+            return
+        self._response_save_running = False
+        retry_requested = self._save_retry_requested
+        self._save_retry_requested = False
+        if failed:
             text = (
                 "Response could not be saved. Free disk space and try again. You can still copy it."
             )
             self.SetStatusText(text)
             self._speak(text)
-            return False
+            return
+        message.id = saved_id
         self._unsaved_response = None
-        return True
+        if self._regeneration_history is not None:
+            history = [
+                message if item.id == message.id else item for item in self._regeneration_history
+            ]
+            self._render_conversation(messages=history)
+            self._regeneration_history = None
+            self.SetStatusText("Response regenerated with a fresh, non-cached result.")
+        self.regenerate_button.Enable(not self.generating and not self._attachments_loading)
+        if retry_requested:
+            text = "Response saved. You can try that action again now."
+            self.SetStatusText(text)
+            self._speak(text)
 
     def _generation_finished(self, error: Exception | None) -> None:
         if self.closing:
@@ -1496,7 +1545,6 @@ class ChatPanel(wx.Panel):
         was_cancelled = bool(self.generation_cancel and self.generation_cancel.is_set())
         regenerated_message_id = self.regenerating_message_id
         was_regenerating = regenerated_message_id is not None
-        save_failed = False
         try:
             if self.current_conversation_id is not None and self.assistant_buffer:
                 if not was_regenerating or (not error and not was_cancelled):
@@ -1510,7 +1558,7 @@ class ChatPanel(wx.Panel):
                         content=text,
                     )
                     self._unsaved_response = message
-                    save_failed = not self._save_pending_response()
+                    self._save_pending_response()
                     for index in range(len(self.history_entries) - 1, -1, -1):
                         entry = self.history_entries[index]
                         if entry.role == "assistant" and (
@@ -1526,15 +1574,17 @@ class ChatPanel(wx.Panel):
             self.stop_button.Disable()
             self.add_files_button.Enable()
             self._refresh_attachment_list()
-            self._update_regenerate_enabled()
+            self.regenerate_button.Enable(
+                was_regenerating
+                and self._unsaved_response is None
+                and not self._attachments_loading
+            )
             self._flush_response_announcement()
-
-        if save_failed:
-            return
 
         if error:
             if was_regenerating:
-                self._render_conversation()
+                self._render_conversation(messages=self._regeneration_history or [])
+                self._regeneration_history = None
             else:
                 self._append_history_text(f"\r\n\r\n[Error: {error}]")
                 self._append_history_entry(Message(role="status", content=f"Error: {error}"))
@@ -1546,15 +1596,19 @@ class ChatPanel(wx.Panel):
             wx.MessageBox(error_text, f"{action} Error", wx.OK | wx.ICON_ERROR, self)
         elif was_cancelled:
             if was_regenerating:
-                self._render_conversation()
+                self._render_conversation(messages=self._regeneration_history or [])
+                self._regeneration_history = None
                 self.SetStatusText("Regeneration stopped; the previous response was preserved.")
             else:
                 self._append_history_text("\r\n\r\n[Generation stopped]")
                 self._append_history_entry(Message(role="status", content="Generation stopped"))
                 self.SetStatusText(self.last_generation_status or "Generation stopped")
         elif was_regenerating:
-            self._render_conversation()
-            self.SetStatusText("Response regenerated with a fresh, non-cached result.")
+            if self._unsaved_response is None:
+                self._render_conversation(messages=self._regeneration_history or [])
+                self._regeneration_history = None
+            else:
+                self.SetStatusText("Saving regenerated response...")
         else:
             self.SetStatusText("Response complete")
 

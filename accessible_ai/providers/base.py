@@ -106,6 +106,9 @@ class BaseProvider(ABC):
 def _cancellable_lines(response: httpx.Response, cancel: Event) -> Iterator[str]:
     """A silent socket read must not hold the caller after Stop."""
     if cancel.is_set():
+        close = getattr(response, "close", None)
+        if close is not None:
+            close()
         return
     pending: Queue[object] = Queue(maxsize=1)
     stopped = Event()
