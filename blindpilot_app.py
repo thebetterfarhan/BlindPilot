@@ -447,6 +447,58 @@ GUI_BUDGET_MS = 50.0
 # and the record must not grow without limit on a machine that is having a bad
 # day. Read by the tests that guard a handler, written only by `_gui_work`.
 _over_budget_work: deque[tuple[str, float]] = deque(maxlen=200)
+_gui_timing_frames: list["_GuiTimingFrame"] = []
+
+
+class _GuiTimingFrame:
+    def __init__(self):
+        self.started = time.perf_counter()
+        self.elapsed = 0.0
+        self.pause_depth = 0
+
+    def pause(self):
+        if self.pause_depth == 0:
+            self.elapsed += time.perf_counter() - self.started
+        self.pause_depth += 1
+
+    def resume(self):
+        self.pause_depth -= 1
+        if self.pause_depth == 0:
+            self.started = time.perf_counter()
+
+    def finish(self):
+        if self.pause_depth == 0:
+            self.elapsed += time.perf_counter() - self.started
+        return self.elapsed
+
+
+class _GuiModalHook(wx.ModalDialogHook):
+    def __init__(self):
+        super().__init__()
+        self.snapshots = []
+
+    def Enter(self, dialog):
+        frames = list(_gui_timing_frames)
+        self.snapshots.append(frames)
+        for frame in frames:
+            frame.pause()
+        return wx.ID_NONE
+
+    def Exit(self, dialog):
+        for frame in self.snapshots.pop():
+            frame.resume()
+
+
+class _gui_modal_tracking:
+    """Keep the wx hook alive and registered for an application run."""
+
+    def __enter__(self):
+        self.hook = _GuiModalHook()
+        self.hook.Register()
+        return self.hook
+
+    def __exit__(self, exc_type, exc, tb):
+        self.hook.Unregister()
 
 
 def over_budget_work() -> list[tuple[str, float]]:
@@ -467,16 +519,40 @@ def _gui_work(name: str, action: Callable[..., object]) -> Callable[..., None]:
     logger = logging.getLogger("blindpilot.timing")
 
     def run(*args: object, **kwargs: object) -> None:
-        started = time.perf_counter()
+        frame = _GuiTimingFrame()
+        _gui_timing_frames.append(frame)
         try:
             action(*args, **kwargs)
         finally:
-            spent = (time.perf_counter() - started) * 1000.0
+            _gui_timing_frames.remove(frame)
+            spent = frame.finish() * 1000.0
             if spent > GUI_BUDGET_MS:
                 _over_budget_work.append((name, spent))
                 logger.debug("%s spent %.0f ms on the GUI thread", name, spent)
 
     return run
+
+
+def _bind_gui(receiver, event, action, *bind_args, label=None, **bind_kwargs):
+    """Bind a measured callback and return the handler for later unbinding."""
+    if label is None:
+        event_name = next(
+            (
+                name
+                for name, candidate in vars(wx).items()
+                if name.startswith("EVT_") and candidate is event
+            ),
+            f"event {getattr(event, 'typeId', 'unknown')}",
+        )
+        action_name = getattr(action, "__qualname__", None)
+        if action_name is None:
+            action_name = type(action).__qualname__
+        name = f"{event_name}: {action_name}"
+    else:
+        name = label
+    handler = _gui_work(name, action)
+    receiver.Bind(event, handler, *bind_args, **bind_kwargs)
+    return handler
 
 
 _ORIGINAL_CALL_AFTER = wx.CallAfter
@@ -3175,7 +3251,13 @@ class SettingsFilesDialog(wx.Dialog):
         outer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, pad)
         self.SetSizerAndFit(outer)
 
-        self.Bind(wx.EVT_BUTTON, lambda _event: self._open_selected(), open_button)
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _event: self._open_selected(),
+            open_button,
+            label="Open settings file button",
+        )
         self.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._open_selected(), self.list_box)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
         self.Bind(wx.EVT_SIZE, self._on_size)
@@ -16736,114 +16818,117 @@ def main() -> int:
     install_path.keep_bundle_off_child_path()
     portable_node.activate_managed_cli_paths()
     app = wx.App(False)
-    # The application menu on macOS reads the display name; without this it
-    # says "Python" when BlindPilot is run from source.
-    app.SetAppName(APP_NAME)
-    app.SetAppDisplayName(APP_NAME)
-    # One copy per user. A second one shares the config, the history and
-    # Codex's app server with the first and fights it over all three; starting
-    # it again is almost always somebody looking for the window they lost.
-    # Startup checks run beside a working copy and are exempt.
-    instance = (
-        None if gui_startup_smoke else wx.SingleInstanceChecker(f"{APP_NAME}-{wx.GetUserId()}")
-    )
-    # A blindpilot:// session link, when Windows started this copy for one.
-    link = next(
-        (arg for arg in sys.argv[1:] if arg.startswith(f"{remote_sessions.LINK_SCHEME}:")), ""
-    )
-    if instance is not None and instance.IsAnotherRunning():
-        logging.getLogger("blindpilot").info("another BlindPilot is running; raising it")
-        if link:
-            hand_over_link(link)
-        if not _raise_running_copy():
-            wx.MessageBox("BlindPilot is already running.", APP_NAME, wx.OK | wx.ICON_INFORMATION)
-        return 0
-
-    cfg = _load_config()
-    # Chosen here, before the first window, because wxWidgets cannot change
-    # it later; that is why Preferences says the choice waits for a restart.
-    # Dark mode on Windows is experimental in wxWidgets 3.3, so a refusal is
-    # noted and the app carries on with whatever it gets.
-    appearance = _valid_appearance(cfg.get("appearance"))
-    set_appearance = getattr(app, "SetAppearance", None)
-    if set_appearance is None:
-        # wxPython before 4.3 has no appearance API. requirements.txt requires
-        # 4.3.2 or later, so this only covers a source checkout on an older one.
-        logging.getLogger("blindpilot").info(
-            "appearance %s was not applied, this wxPython cannot set it", appearance
+    with _gui_modal_tracking():
+        # The application menu on macOS reads the display name; without this it
+        # says "Python" when BlindPilot is run from source.
+        app.SetAppName(APP_NAME)
+        app.SetAppDisplayName(APP_NAME)
+        # One copy per user. A second one shares the config, the history and
+        # Codex's app server with the first and fights it over all three; starting
+        # it again is almost always somebody looking for the window they lost.
+        # Startup checks run beside a working copy and are exempt.
+        instance = (
+            None if gui_startup_smoke else wx.SingleInstanceChecker(f"{APP_NAME}-{wx.GetUserId()}")
         )
-    else:
-        result = set_appearance(_appearance_for(appearance))
-        if result != wx.App.AppearanceResult.Ok:
+        # A blindpilot:// session link, when Windows started this copy for one.
+        link = next(
+            (arg for arg in sys.argv[1:] if arg.startswith(f"{remote_sessions.LINK_SCHEME}:")), ""
+        )
+        if instance is not None and instance.IsAnotherRunning():
+            logging.getLogger("blindpilot").info("another BlindPilot is running; raising it")
+            if link:
+                hand_over_link(link)
+            if not _raise_running_copy():
+                wx.MessageBox(
+                    "BlindPilot is already running.", APP_NAME, wx.OK | wx.ICON_INFORMATION
+                )
+            return 0
+
+        cfg = _load_config()
+        # Chosen here, before the first window, because wxWidgets cannot change
+        # it later; that is why Preferences says the choice waits for a restart.
+        # Dark mode on Windows is experimental in wxWidgets 3.3, so a refusal is
+        # noted and the app carries on with whatever it gets.
+        appearance = _valid_appearance(cfg.get("appearance"))
+        set_appearance = getattr(app, "SetAppearance", None)
+        if set_appearance is None:
+            # wxPython before 4.3 has no appearance API. requirements.txt requires
+            # 4.3.2 or later, so this only covers a source checkout on an older one.
             logging.getLogger("blindpilot").info(
-                "appearance %s was not applied, wx returned %s", appearance, result
+                "appearance %s was not applied, this wxPython cannot set it", appearance
             )
-    # Installs that predate full-auto still carry the mode an older BlindPilot
-    # saved for them. Moving them over here is what makes "nothing stops to
-    # ask" true of an upgrade as well as of a fresh install.
-    if adopt_full_auto_default(cfg):
-        _save_config(cfg)
-    if chat_gui_startup_smoke:
-        cfg["app_mode"] = APP_MODE_CHAT
-    # A packaged GUI smoke test runs with a clean temporary profile in CI. It
-    # must exercise the real main window without waiting in the interactive
-    # first-run wizard.
-    if not cfg.get("setup_complete") and not gui_startup_smoke:
-        wizard = SetupWizard(
-            None,
-            cfg.get("projects_folder"),
-            normalize_backend(cfg.get("backend")),
-        )
-        result = wizard.ShowModal()
-        if result == wx.ID_OK:
-            if wizard.projects_folder:
-                cfg["projects_folder"] = wizard.projects_folder
-            cfg["backend"] = wizard.backend
-        # Finishing or deliberately dismissing the optional Claude setup both
-        # count as handled. Users choosing Codex or FreeBuff should not be sent
-        # back through the Claude wizard on every launch.
-        cfg["setup_complete"] = True
-        _record_setup_complete(cfg)
-        wizard.Destroy()
-        # Even if cancelled, open the app — user may know what they're doing.
+        else:
+            result = set_appearance(_appearance_for(appearance))
+            if result != wx.App.AppearanceResult.Ok:
+                logging.getLogger("blindpilot").info(
+                    "appearance %s was not applied, wx returned %s", appearance, result
+                )
+        # Installs that predate full-auto still carry the mode an older BlindPilot
+        # saved for them. Moving them over here is what makes "nothing stops to
+        # ask" true of an upgrade as well as of a fresh install.
+        if adopt_full_auto_default(cfg):
+            _save_config(cfg)
+        if chat_gui_startup_smoke:
+            cfg["app_mode"] = APP_MODE_CHAT
+        # A packaged GUI smoke test runs with a clean temporary profile in CI. It
+        # must exercise the real main window without waiting in the interactive
+        # first-run wizard.
+        if not cfg.get("setup_complete") and not gui_startup_smoke:
+            wizard = SetupWizard(
+                None,
+                cfg.get("projects_folder"),
+                normalize_backend(cfg.get("backend")),
+            )
+            result = wizard.ShowModal()
+            if result == wx.ID_OK:
+                if wizard.projects_folder:
+                    cfg["projects_folder"] = wizard.projects_folder
+                cfg["backend"] = wizard.backend
+            # Finishing or deliberately dismissing the optional Claude setup both
+            # count as handled. Users choosing Codex or FreeBuff should not be sent
+            # back through the Claude wizard on every launch.
+            cfg["setup_complete"] = True
+            _record_setup_complete(cfg)
+            wizard.Destroy()
+            # Even if cancelled, open the app — user may know what they're doing.
 
-    global _STARTUP_CHECK
-    _STARTUP_CHECK = gui_startup_smoke
-    frame = MainFrame(initial_cwd=os.getcwd())
-    if gui_startup_smoke:
-        # Never shown. What this checks is that the window can be *built* -
-        # every menu, control and binding made, and the sizers able to lay
-        # them out - and none of that needs it on screen. Showing it put a
-        # window in front of whoever was running the checks for a second and
-        # a half, and for somebody who navigates by ear that is not a
-        # harmless flicker.
-        frame.Layout()
-        wx.CallLater(1500, frame.Close)
-    else:
-        frame.Show()
-        frame.watch_for_links()
-        frame.watch_model_catalogs()
-        if link:
-            wx.CallAfter(frame.open_session_link, link)
-        frame.Raise()
-        _bring_to_front()
-        # An update that failed did so with no window to report to, so its
-        # reason is read out here, before anything else competes for attention.
-        wx.CallLater(1200, frame.report_failed_update)
-        if frame.automatic_update_check_enabled():
-            wx.CallLater(5000, frame.check_for_updates_silently)
-        # Abandoned downloads are tens of megabytes each.
-        wx.CallLater(8000, sweep_temporary_files)
-    app.MainLoop()
-    # The main window, destroyed as the loop ended, is only queued for
-    # deletion. Left queued, wxMSW tears the app down around it and prints
-    # "UnregisterClass failed ... Class still has open windows". One more idle
-    # pass frees it. Only this window: others belong to whoever called main().
-    if any(window is frame for window in wx.GetTopLevelWindows()):
-        frame.Destroy()
-        wx.CallAfter(app.ExitMainLoop)
+        global _STARTUP_CHECK
+        _STARTUP_CHECK = gui_startup_smoke
+        frame = MainFrame(initial_cwd=os.getcwd())
+        if gui_startup_smoke:
+            # Never shown. What this checks is that the window can be *built* -
+            # every menu, control and binding made, and the sizers able to lay
+            # them out - and none of that needs it on screen. Showing it put a
+            # window in front of whoever was running the checks for a second and
+            # a half, and for somebody who navigates by ear that is not a
+            # harmless flicker.
+            frame.Layout()
+            wx.CallLater(1500, frame.Close)
+        else:
+            frame.Show()
+            frame.watch_for_links()
+            frame.watch_model_catalogs()
+            if link:
+                wx.CallAfter(frame.open_session_link, link)
+            frame.Raise()
+            _bring_to_front()
+            # An update that failed did so with no window to report to, so its
+            # reason is read out here, before anything else competes for attention.
+            wx.CallLater(1200, frame.report_failed_update)
+            if frame.automatic_update_check_enabled():
+                wx.CallLater(5000, frame.check_for_updates_silently)
+            # Abandoned downloads are tens of megabytes each.
+            wx.CallLater(8000, sweep_temporary_files)
         app.MainLoop()
-    return 0
+        # The main window, destroyed as the loop ended, is only queued for
+        # deletion. Left queued, wxMSW tears the app down around it and prints
+        # "UnregisterClass failed ... Class still has open windows". One more idle
+        # pass frees it. Only this window: others belong to whoever called main().
+        if any(window is frame for window in wx.GetTopLevelWindows()):
+            frame.Destroy()
+            wx.CallAfter(app.ExitMainLoop)
+            app.MainLoop()
+        return 0
 
 
 if __name__ == "__main__":
