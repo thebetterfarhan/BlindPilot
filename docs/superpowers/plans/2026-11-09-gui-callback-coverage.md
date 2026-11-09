@@ -72,8 +72,8 @@ GitHub issues #97 and #98 track these tasks, with #98 natively blocked by #97. T
 - `blind_pilot.py --startup-smoke` and `--startup-gui-smoke` both exited 0
   under Xvfb. The GUI smoke emitted a Fontconfig cache warning and GTK
   accelerator debug messages.
-- Independent standards review found no code violations. The reviewer’s only
-  finding was the diagnostic-label wording corrected above. The parent agent's
+- Independent standards review found no code violations. The spec review's only
+  code finding was the diagnostic-label wording corrected above. The parent agent's
   X11-focused XTest probe verified the GTK native `MessageBox` modal lifecycle.
 - Linux automated checks do not verify Windows/macOS behavior or live
   screen-reader behavior; those remain unrun. No push or publication was done.
