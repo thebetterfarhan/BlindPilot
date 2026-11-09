@@ -16159,7 +16159,7 @@ class MainFrame(wx.Frame):
                 if event.GetKeyCode() == wx.WXK_ESCAPE
                 else event.Skip()
             ),
-            label="EVT_CHAR_HOOK: MainFrame.progress -> IfExp",
+            label="EVT_CHAR_HOOK: MainFrame.progress -> Escape cancels history open",
         )
 
         def close(event) -> None:
