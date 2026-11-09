@@ -5788,6 +5788,7 @@ class HistoryDialog(wx.Dialog):
             self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2, name="Last exchange"
         )
         self._preview_for: Optional[HistoryEntry] = None
+        self._preview_cancel: Optional[threading.Event] = None
         self._preview_timer = wx.CallLater(300, self._load_preview)
         self._preview_timer.Stop()
 
@@ -5908,6 +5909,9 @@ class HistoryDialog(wx.Dialog):
         # Cocoa may defer native destruction past an already queued callback.
         self._load_serial += 1
         self._preview_timer.Stop()
+        if self._preview_cancel is not None:
+            self._preview_cancel.set()
+            self._preview_cancel = None
         self._preview_for = None
         return super().Destroy()
 
@@ -5985,7 +5989,10 @@ class HistoryDialog(wx.Dialog):
         if entry == self._preview_for:
             return
         self._preview_timer.Stop()
+        if self._preview_cancel is not None:
+            self._preview_cancel.set()
         self._preview_for = entry
+        self._preview_cancel = threading.Event() if entry is not None else None
         self.preview.ChangeValue("Reading…" if entry else "")
         if entry is not None:
             self._preview_timer.Start(300)
@@ -5994,22 +6001,30 @@ class HistoryDialog(wx.Dialog):
         if not self:
             return
         entry = self._preview_for
-        if entry is None:
+        cancel = self._preview_cancel
+        if entry is None or cancel is None:
             return
 
         def work() -> None:
             try:
-                text = _last_exchange(load_turns(entry))
+                text = _last_exchange(load_turns(entry, cancelled=cancel.is_set))
+            except HistoryOpenCancelled:
+                return
             except Exception:
                 text = "Could not read this conversation."
-            _call_after_alive(self._show_preview, entry, text)
+            _call_after_alive(self._show_preview, entry, cancel, text)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_preview(self, entry: HistoryEntry, text: str) -> None:
-        # Arrowing on while it was read leaves a newer entry wanted; and the
-        # dialog may be gone.
-        if self and entry == self._preview_for:
+    def _show_preview(self, entry: HistoryEntry, cancel: threading.Event, text: str) -> None:
+        # A matching entry is not enough: A->B->A gives both A requests the
+        # same entry, so the specific request must still be current as well.
+        if (
+            self
+            and cancel is self._preview_cancel
+            and not cancel.is_set()
+            and entry == self._preview_for
+        ):
             self.preview.ChangeValue(text)
 
     def _set_open_enabled(self, enabled: bool) -> None:
