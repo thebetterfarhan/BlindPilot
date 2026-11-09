@@ -4,6 +4,7 @@ import pytest
 import wx
 
 import blindpilot_app as app
+from blocking_contract import BlockedTheGuiThread, gui_thread_may_not_block
 
 
 def test_bound_button_receives_event_and_can_be_unbound(frame):
@@ -109,6 +110,101 @@ def test_binding_records_slow_callback_with_useful_event_name(frame, monkeypatch
         app.over_budget_work()[0][0]
         == "EVT_BUTTON: test_binding_records_slow_callback_with_useful_event_name.<locals>.slow"
     )
+
+
+def test_migrated_history_button_text_and_keyboard_bindings_pass_blocking_contract(
+    frame, monkeypatch, tmp_path
+):
+    callbacks = []
+    bound = {}
+    original_gui_work = app._gui_work
+
+    def capture(name, action):
+        wrapped = original_gui_work(name, action)
+        bound[name] = wrapped
+        return wrapped
+
+    monkeypatch.setattr(app, "_gui_work", capture)
+    monkeypatch.setattr(app, "_load_config", lambda: {"history_sort": "recent"})
+    monkeypatch.setattr(app.HistoryDialog, "_reload", lambda self: None)
+    monkeypatch.setattr(app.HistoryDialog, "_refresh", lambda self: callbacks.append("text"))
+    monkeypatch.setattr(app.HistoryDialog, "_accept", lambda self: callbacks.append("button"))
+    monkeypatch.setattr(app.HistoryDialog, "_on_key", lambda self, _event: callbacks.append("key"))
+    dialog = app.HistoryDialog(frame, "codex", str(tmp_path))
+    try:
+        button = dialog.FindWindow(wx.ID_OK)
+        events = [
+            (
+                "EVT_BUTTON: HistoryDialog -> _accept",
+                wx.CommandEvent(wx.EVT_BUTTON.typeId, button.GetId()),
+            ),
+            (
+                "EVT_TEXT: HistoryDialog.filter_box -> _refresh",
+                wx.CommandEvent(wx.EVT_TEXT.typeId, dialog.filter_box.GetId()),
+            ),
+            (
+                next(name for name in bound if name.startswith("EVT_CHAR_HOOK:")),
+                wx.KeyEvent(wx.wxEVT_CHAR_HOOK),
+            ),
+        ]
+        with gui_thread_may_not_block():
+            for name, event in events:
+                bound[name](event)
+
+        assert callbacks == ["button", "text", "key"]
+    finally:
+        dialog.Destroy()
+
+
+def test_production_notebook_binding_passes_blocking_contract(wx_app, monkeypatch, tmp_path):
+    import chat_integration
+
+    callbacks = []
+    bound = {}
+    original_gui_work = app._gui_work
+
+    def capture(name, action):
+        wrapped = original_gui_work(name, action)
+        bound[name] = wrapped
+        return wrapped
+
+    monkeypatch.setattr(app, "_gui_work", capture)
+    monkeypatch.setattr(app, "_load_config", lambda: {"setup_complete": True, "app_mode": "agent"})
+    monkeypatch.setattr(app, "_save_config", lambda _value: None)
+    monkeypatch.setattr(app, "_start_legacy_chat_import", lambda: None)
+    monkeypatch.setattr(chat_integration, "database_path", lambda: tmp_path / "chat.sqlite3")
+    monkeypatch.setattr(
+        chat_integration, "import_existing_accessible_ai_data", lambda _target: None
+    )
+
+    def on_tab_changed(self, _event):
+        callbacks.append("tab")
+
+    monkeypatch.setattr(app.MainFrame, "_on_tab_changed", on_tab_changed)
+    frame = app.MainFrame(str(tmp_path))
+    try:
+        handler_name = next(name for name in bound if name.endswith("on_tab_changed"))
+        event = wx.BookCtrlEvent(wx.EVT_BOOKCTRL_PAGE_CHANGED.typeId, frame.notebook.GetId())
+        callbacks.clear()
+        with gui_thread_may_not_block():
+            bound[handler_name](event)
+        assert callbacks == ["tab"]
+    finally:
+        frame.Destroy()
+
+
+def test_gui_guard_rejects_forbidden_work_inside_a_bound_callback(frame):
+    import subprocess
+
+    button = wx.Button(frame)
+    handler = app._bind_gui(
+        button,
+        wx.EVT_BUTTON,
+        lambda _event: subprocess.Popen(["definitely-not-run"]),
+        label="guard negative",
+    )
+    with gui_thread_may_not_block(), pytest.raises(BlockedTheGuiThread, match="process"):
+        handler(wx.CommandEvent(wx.EVT_BUTTON.typeId, button.GetId()))
 
 
 def test_modal_wait_is_excluded_but_work_before_and_after_is_measured(wx_app, monkeypatch):

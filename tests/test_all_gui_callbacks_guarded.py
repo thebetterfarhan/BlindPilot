@@ -27,9 +27,24 @@ def test_every_forbidden_primitive_is_blocked_without_handler_exceptions():
                 raise AssertionError(f"{owner_name}.{name} escaped the GUI guard")
 
 
-def test_every_menu_and_timer_binding_uses_the_budget_wrapper():
+def test_every_application_binding_uses_the_budget_wrapper():
     source = Path(app.__file__).read_text(encoding="utf-8")
+    uncovered = _uncovered_bindings(source)
+
+    assert not uncovered, "Unmeasured GUI callbacks:\n" + "\n".join(uncovered)
+
+
+def _uncovered_bindings(source: str) -> list[str]:
     tree = ast.parse(source)
+    bind_aliases = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "Bind"
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Name)
+    }
     parents: dict[ast.AST, ast.AST] = {}
     for parent in ast.walk(tree):
         for child in ast.iter_child_nodes(parent):
@@ -37,30 +52,56 @@ def test_every_menu_and_timer_binding_uses_the_budget_wrapper():
 
     uncovered: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.attr != "Bind" or len(node.args) < 2:
+        is_bind = isinstance(node.func, ast.Attribute) and node.func.attr == "Bind"
+        is_bind_alias = isinstance(node.func, ast.Name) and node.func.id in bind_aliases
+        if not (is_bind or is_bind_alias):
             continue
-        event = node.args[0]
-        if not isinstance(event, ast.Attribute) or event.attr not in {"EVT_MENU", "EVT_TIMER"}:
-            continue
-        handler = node.args[1]
-        wrapped = (
-            isinstance(handler, ast.Call)
-            and isinstance(handler.func, ast.Name)
-            and handler.func.id == "_gui_work"
-        )
         scope = parents.get(node)
-        while scope is not None and not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        while scope is not None and not isinstance(
+            scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
             scope = parents.get(scope)
-        centralized = isinstance(scope, ast.FunctionDef) and scope.name in {
+        centralized = isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and scope.name in {
+            "_bind_gui",
             "_menu_item",
             "_bind_shortcut",
         }
-        if not wrapped and not centralized:
-            uncovered.append(f"line {node.lineno}: {ast.unparse(handler)}")
+        if not centralized:
+            uncovered.append(f"line {node.lineno}: {ast.unparse(node)}")
+    return uncovered
 
-    assert not uncovered, "Unmeasured menu/timer callbacks:\n" + "\n".join(uncovered)
+
+def test_binding_coverage_finds_unmeasured_event_families_and_aliases():
+    source = """
+button.Bind(wx.EVT_BUTTON, handler)
+window.Bind(wx.EVT_CHAR_HOOK, handler)
+obj.Bind(event_alias, handler_alias)
+obj.Bind(event=event_alias, handler=handler_alias)
+obj.Bind(wx.EVT_TEXT, handler, source)
+obj.Bind(event_alias, handler_alias, id=10)
+obj.Bind(handler=handler, event=event_alias)
+binder = button.Bind
+binder(wx.EVT_BUTTON, handler_alias)
+"""
+    uncovered = _uncovered_bindings(source)
+    assert len(uncovered) == 8
+
+
+def test_binding_coverage_allows_only_named_binding_seams():
+    source = """
+def _bind_gui(receiver, event, handler):
+    receiver.Bind(event, handler)
+    receiver.Bind(event=event, handler=handler)
+    binding = receiver.Bind
+    binding(event, handler)
+def _menu_item(receiver, event, handler):
+    receiver.Bind(event, handler)
+def _bind_shortcut(receiver, event, handler):
+    receiver.Bind(event, handler)
+"""
+    assert _uncovered_bindings(source) == []
 
 
 def test_callafter_and_calllater_are_measured(monkeypatch):
