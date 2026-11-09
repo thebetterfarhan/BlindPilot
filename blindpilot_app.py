@@ -2099,13 +2099,13 @@ def memory_folders(cwd: Optional[str]) -> list[Path]:
     return folders
 
 
-def _replace_agent_file(path: Path, text: str) -> None:
-    """Keep the original agent file if writing its replacement fails."""
+def _replace_text_file(path: Path, text: str, *, newline: Optional[str] = "") -> None:
+    """Keep the original file if writing its replacement fails."""
     path = path.resolve()
     temporary = tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
-        newline="",
+        newline=newline,
         dir=path.parent,
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -2140,7 +2140,7 @@ def add_memory(folder: Path, name: str, description: str, kind: str, body: str) 
     )
     index = folder / "MEMORY.md"
     old = index.read_text(encoding="utf-8") if index.exists() else "# Memory index\n"
-    _replace_agent_file(index, f"{old.rstrip()}\n- [{slug}]({slug}.md) — {description}\n")
+    _replace_text_file(index, f"{old.rstrip()}\n- [{slug}]({slug}.md) — {description}\n")
     return path
 
 
@@ -2157,7 +2157,7 @@ def delete_memory(path: Path) -> None:
         if f"({path.name})" not in line and not line.startswith(f"- {path.stem}:")
     ]
     if kept != lines:
-        _replace_agent_file(index, "".join(kept))
+        _replace_text_file(index, "".join(kept))
 
 
 @dataclass
@@ -2230,7 +2230,7 @@ def add_taste(home: Path, category: str, text: str) -> Path:
     if not old.strip():
         old = f"# {(category or 'general').capitalize()} taste\n\n"
     folder.mkdir(parents=True, exist_ok=True)
-    _replace_agent_file(path, f"{old}- {' '.join(text.split())}\n")
+    _replace_text_file(path, f"{old}- {' '.join(text.split())}\n")
     return path
 
 
@@ -2255,7 +2255,7 @@ def hermes_memories(home: Path) -> list[tuple[str, str]]:
 def add_hermes_memory(path: Path, text: str) -> None:
     entries = [e for e in hermes_entries(path) if e] if path.exists() else []
     path.parent.mkdir(parents=True, exist_ok=True)
-    _replace_agent_file(path, "\n§\n".join([*entries, text.strip()]))
+    _replace_text_file(path, "\n§\n".join([*entries, text.strip()]))
 
 
 _AGENT_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -2336,7 +2336,7 @@ def delete_entry(key: str, editable: str) -> None:
         lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
         del lines[int(at)]
         text = "".join(lines)
-    _replace_agent_file(file, text)
+    _replace_text_file(file, text)
 
 
 def save_entry(key: str, editable: str, text: str) -> None:
@@ -2344,7 +2344,7 @@ def save_entry(key: str, editable: str, text: str) -> None:
     path, _, at = key.partition("\n")
     file = Path(path)
     if not at:
-        _replace_agent_file(file, text)
+        _replace_text_file(file, text)
         return
     if not text.strip():
         raise ValueError("it would be empty; Delete removes it instead")
@@ -2357,7 +2357,7 @@ def save_entry(key: str, editable: str, text: str) -> None:
         end = "\n" if lines[int(at)].endswith("\n") else ""
         lines[int(at)] = f"- {' '.join(text.split())}{end}"
         new = "".join(lines)
-    _replace_agent_file(file, new)
+    _replace_text_file(file, new)
 
 
 def agent_files(cwd: Optional[str]) -> list[AgentFiles]:
@@ -6981,6 +6981,7 @@ class SessionPanel(wx.Panel):
         # that finishes after a refresh cannot fill the list it replaced.
         self._changed_files_serial = 0
         self._formatted_serial = 0
+        self._export_running = False
         # The same for slash-command probes, and the dialog they fill.
         self._slash_commands_serial = 0
         self._slash_dialog: Optional[SlashCommandDialog] = None
@@ -11261,6 +11262,9 @@ class SessionPanel(wx.Panel):
         Documents rather than the project folder, where a stray transcript
         would end up in somebody's commit.
         """
+        if self._export_running:
+            self._announce("An export is already in progress")
+            return
         if not self._rows:
             self._announce("Error: Nothing to export yet")
             return
@@ -11296,17 +11300,32 @@ class SessionPanel(wx.Panel):
                 != wx.YES
             ):
                 return
-        if kind == ".txt":
-            text = reassemble_all(self._rows)
-        else:
-            text = reassemble_all(self._rows, header="## Response {}")
-        if kind in (".html", ".htm"):
-            text = markdown_page(text, name)
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(text.rstrip("\n") + "\n")
-        except OSError as exc:
-            self._announce(f"Error: Could not export the conversation: {exc}")
+        rows = [replace(row) for row in self._rows]
+        self._export_running = True
+
+        def work() -> None:
+            error = ""
+            try:
+                if kind == ".txt":
+                    text = reassemble_all(rows)
+                else:
+                    text = reassemble_all(rows, header="## Response {}")
+                if kind in (".html", ".htm"):
+                    text = markdown_page(text, name)
+                _replace_text_file(Path(path), text.rstrip("\n") + "\n", newline=None)
+            except Exception as exc:  # noqa: BLE001 - export failures return through the GUI
+                error = str(exc) or type(exc).__name__
+            _call_after_alive(self._export_finished, path, error)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _export_finished(self, path: str, error: str) -> None:
+        """An accepted export finishes even if its conversation has changed."""
+        if not self:
+            return
+        self._export_running = False
+        if error:
+            self._announce(f"Error: Could not export the conversation: {error}")
             return
         self._announce(f"Exported conversation to {os.path.basename(path)}")
 
