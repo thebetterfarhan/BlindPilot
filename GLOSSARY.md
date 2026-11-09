@@ -63,3 +63,11 @@ _Avoid_: Codex account, Codex sign-in, Codex auth
 **Session**:
 A provider-side identity for one ongoing conversation, held by the backend that owns it — a Codex thread, a Hermes session, a Muse chat.
 _Avoid_: Using "session" for a Held process or for a ChatGPT sign-in.
+
+**Conversation opening**:
+Reading a saved conversation back into BlindPilot to view or continue it.
+_Avoid_: Treating the opening request as the provider-side Session itself.
+
+**Cancel opening**:
+Withdrawal of a pending Conversation opening before it creates or fills a tab.
+_Avoid_: Stop task, Drop.
