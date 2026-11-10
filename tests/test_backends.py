@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends
+import codex_worker
 import process_utils
 import questions
 from agent_backends import (
@@ -126,6 +127,7 @@ def test_codex_catalog_includes_all_reported_reasoning_levels(monkeypatch, tmp_p
         ]
     }
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(
         agent_backends.subprocess,
         "run",
@@ -201,6 +203,7 @@ def test_codex_offers_only_the_models_the_service_still_lists(monkeypatch, tmp_p
     }
     run, calls = _codex_models_run({(): live, ("--bundled",): bundled})
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
 
@@ -220,6 +223,7 @@ def test_codex_falls_back_to_the_installed_copy_when_the_service_is_unreachable(
     bundled = {"models": [{"slug": "gpt-6-sol", "visibility": "list"}]}
     run, calls = _codex_models_run({("--bundled",): bundled})
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
 
@@ -280,7 +284,7 @@ def test_codex_app_server_prefers_packaged_windows_binary(monkeypatch, tmp_path)
     native.touch()
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
 
-    assert agent_backends._codex_app_server_binary(str(wrapper)) == str(native)
+    assert codex_worker._codex_app_server_binary(str(wrapper)) == str(native)
     assert CodexWorker._policy("acceptEdits")[0] == "on-request"
 
 
@@ -308,7 +312,7 @@ def test_codex_app_server_finds_the_hoisted_windows_binary(monkeypatch, tmp_path
     native.touch()
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
 
-    assert agent_backends._codex_app_server_binary(str(wrapper)) == str(native)
+    assert codex_worker._codex_app_server_binary(str(wrapper)) == str(native)
     assert CodexWorker._policy("bypassPermissions") == (
         "never",
         {"type": "dangerFullAccess"},
@@ -1118,6 +1122,7 @@ def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     """Codex has no /compact message, so sending one as text would do nothing."""
     server = _ScriptedCodexServer()
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: server)
     completed: list[str] = []
     failures: list[str] = []

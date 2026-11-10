@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import agent_backends
+import codex_worker
 import process_utils
 import backend_pool
 from pool_contract import check_pool_contract
@@ -267,7 +268,7 @@ def test_a_reply_goes_to_the_turn_that_asked_and_not_to_another_tab():
     server.start_readers()
 
     assert mine.get(timeout=5) == reply
-    assert theirs.get(timeout=5) is agent_backends._CODEX_CLOSED
+    assert theirs.get(timeout=5) is codex_worker._CODEX_CLOSED
 
 
 def test_each_tab_only_hears_its_own_conversation():
@@ -292,20 +293,20 @@ def test_a_turn_reading_a_server_that_dies_is_woken_rather_than_left_waiting():
     server.attach("thread-1", inbox)
     server.start_readers()
 
-    assert inbox.get(timeout=5) is agent_backends._CODEX_CLOSED
+    assert inbox.get(timeout=5) is codex_worker._CODEX_CLOSED
 
 
 def test_the_verify_budget_is_half_the_teardown_budget():
     """It has to fit inside _CANCEL_JOIN_SECONDS with room for the join."""
     import blindpilot_app
 
-    assert agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS == 1.5
-    assert agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS < blindpilot_app._CANCEL_JOIN_SECONDS
+    assert codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS == 1.5
+    assert codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS < blindpilot_app._CANCEL_JOIN_SECONDS
     # Pin the relationship the name claims, not just the current numbers: if
     # _CANCEL_JOIN_SECONDS moved, the "half" the docstring promises should
     # move with it rather than silently drift apart while both assertions
     # above kept passing.
-    assert agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS == blindpilot_app._CANCEL_JOIN_SECONDS / 2
+    assert codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS == blindpilot_app._CANCEL_JOIN_SECONDS / 2
 
 
 @pytest.mark.parametrize(
@@ -383,12 +384,12 @@ def test_the_shared_server_is_started_from_home_not_a_project(monkeypatch):
         seen["cwd"] = kwargs.get("cwd")
         raise OSError("stop here, the launch arguments are what is under test")
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     with pytest.raises(OSError):
-        agent_backends._start_codex_server()
+        codex_worker._start_codex_server()
     assert seen["cwd"] == str(Path.home())
     assert "app-server" in seen["cmd"]
     assert "--stdio" in seen["cmd"]
@@ -408,12 +409,12 @@ def test_the_shared_server_is_launched_without_a_console_window(monkeypatch):
         seen.update(kwargs)
         raise OSError("enough")
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     with pytest.raises(OSError):
-        agent_backends._start_codex_server()
+        codex_worker._start_codex_server()
     for key, value in process_utils.no_window_kwargs().items():
         assert seen.get(key, 0) & value == value
     if process_utils.CREATE_NO_WINDOW:
@@ -470,9 +471,9 @@ class _ScriptedProc(_FakeProc):
 def test_a_turn_borrows_the_server_and_leaves_it_running(monkeypatch):
     """The turn no longer owns the process, so it must not stop it either."""
     proc = _ScriptedProc()
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: proc)
     completed: list[str] = []
     failures: list[str] = []
@@ -584,9 +585,9 @@ class _ProcWithLeftovers(_FakeProc):
 
 
 def _turn(proc, monkeypatch, session_id=None, prompt="hello"):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: proc)
     completed: list[str] = []
     failures: list[str] = []
@@ -641,7 +642,7 @@ def test_two_first_turns_at_once_start_one_server_and_neither_is_killed(monkeypa
         started.append(server)
         return server
 
-    monkeypatch.setattr(agent_backends, "_start_codex_server", slow_start)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", slow_start)
     borrowed: list = []
 
     def borrow() -> None:
@@ -709,7 +710,7 @@ def test_a_conversation_being_read_is_never_dropped_by_another_tabs_failure(monk
     server = agent_backends.CodexServer(_FakeProc())
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     backend_pool.pool().keep(key, backend_pool.HeldProcess(server, agent_backends.codex_adapter()))
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
     mid_turn = _bare_worker()
     assert mid_turn._borrow_server() is not None
     server.attach("someone-elses-thread", mid_turn._inbox)
@@ -764,7 +765,7 @@ def test_a_server_a_turn_is_still_waiting_on_is_not_taken_away(monkeypatch):
     server = agent_backends.CodexServer(_FakeProc())
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     backend_pool.pool().keep(key, backend_pool.HeldProcess(server, agent_backends.codex_adapter()))
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
 
     waiting = _bare_worker()
     assert waiting._borrow_server() is not None
@@ -785,7 +786,7 @@ def test_the_last_turn_holding_a_broken_server_is_the_one_that_drops_it(monkeypa
     server = agent_backends.CodexServer(_FakeProc())
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     backend_pool.pool().keep(key, backend_pool.HeldProcess(server, agent_backends.codex_adapter()))
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
 
     worker = _bare_worker(session_id="no-such-thread")
     assert worker._borrow_server() is not None
@@ -833,14 +834,14 @@ def test_a_reply_of_the_wrong_shape_does_not_end_every_tabs_turn():
 def test_a_question_from_a_turn_that_is_over_is_declined_rather_than_ignored():
     """Codex holds an unanswered request id open, so silence is not refusal."""
     sent = [
-        agent_backends._declined_request(
+        codex_worker._declined_request(
             {
                 "method": "item/commandExecution/requestApproval",
                 "id": 77,
                 "params": {"threadId": "thread-1", "turnId": "turn-1"},
             }
         ),
-        agent_backends._declined_request(
+        codex_worker._declined_request(
             {
                 "method": "item/tool/requestUserInput",
                 "id": 78,
@@ -953,9 +954,9 @@ def test_a_compaction_whose_items_arrive_before_its_announcement_still_finishes(
                 }
             )
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: _CompactsOutOfOrder())
     completed: list[str] = []
     failures: list[str] = []
@@ -1098,7 +1099,7 @@ def test_a_server_is_not_dropped_while_another_tab_is_registering_its_borrow(mon
     server = agent_backends.CodexServer(_FakeProc())
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     backend_pool.pool().keep(key, backend_pool.HeldProcess(server, agent_backends.codex_adapter()))
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
 
     holding = _bare_worker()
     assert holding._borrow_server() is not None
@@ -1204,7 +1205,7 @@ def test_cancelling_asks_codex_to_stop_the_turn_and_waits_to_hear_that_it_did():
     interrupts = [m for m in sent if m.get("method") == "turn/interrupt"]
     assert len(interrupts) == 1, f"the turn was not asked to stop: {sent}"
     assert interrupts[0]["params"] == {"threadId": "thread-1", "turnId": "turn-1"}
-    assert seen == [("thread-1", "turn-1", agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS)], (
+    assert seen == [("thread-1", "turn-1", codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS)], (
         "the interrupt was sent but never waited on"
     )
 
@@ -1369,7 +1370,7 @@ def test_a_cancel_does_not_wait_on_a_turn_that_left_without_looking():
     finally:
         running.join(timeout=5)
 
-    assert took < agent_backends._CODEX_TURN_ID_GRACE_SECONDS, (
+    assert took < codex_worker._CODEX_TURN_ID_GRACE_SECONDS, (
         f"a cancel spent {took:.2f}s waiting for a turn that had gone"
     )
 
@@ -1413,7 +1414,7 @@ def test_a_cancel_that_arrives_after_the_answer_leaves_the_thread_alone(monkeypa
     finally:
         proc.done.set()
 
-    assert took < agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS, (
+    assert took < codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS, (
         f"a cancel spent {took:.2f}s waiting on a turn that had already ended"
     )
     assert worker.abandoned_thread == "", "a finished conversation was given up"
@@ -1428,9 +1429,7 @@ def test_stopping_a_turn_fits_inside_the_windows_teardown_budget():
     and the window is waiting on both with a join still to come."""
     import blindpilot_app
 
-    whole = (
-        agent_backends._CODEX_TURN_ID_GRACE_SECONDS + agent_backends._CODEX_INTERRUPT_VERIFY_SECONDS
-    )
+    whole = codex_worker._CODEX_TURN_ID_GRACE_SECONDS + codex_worker._CODEX_INTERRUPT_VERIFY_SECONDS
     assert whole < blindpilot_app._CANCEL_JOIN_SECONDS
 
 
@@ -1453,7 +1452,7 @@ class _StopsBeforeItIsNamed(_ScriptedProc):
         turn = self._asked("turn/start")
         self.cancelling = threading.Thread(target=self._cancel, daemon=True)
         self.cancelling.start()
-        time.sleep(agent_backends._CODEX_POLL_SECONDS + 0.05)
+        time.sleep(codex_worker._CODEX_POLL_SECONDS + 0.05)
         yield json.dumps({"id": turn["id"], "result": {"turn": {"id": "turn-1"}}})
         self._asked("turn/interrupt")
         yield json.dumps(
@@ -1476,9 +1475,9 @@ def test_a_turn_stopped_before_it_was_named_is_still_stopped(monkeypatch):
     """
     later: list = []
     proc = _StopsBeforeItIsNamed(lambda: later[0].cancel())
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: proc)
     failures: list[str] = []
     worker = agent_backends.CodexWorker(
@@ -1642,16 +1641,16 @@ def test_a_turn_stopped_before_its_thread_was_named_is_not_left_running(monkeypa
     wakes the turn: that is the interleaving the live run hit, and at a tenth
     of a second it is whichever gets there first.
     """
-    monkeypatch.setattr(agent_backends, "_CODEX_POLL_SECONDS", 5.0)
+    monkeypatch.setattr(codex_worker, "_CODEX_POLL_SECONDS", 5.0)
     later: list = []
     proc = _StoppedBeforeTheThreadIsNamed(
         lambda: later[0].cancel(),
         lambda: later[0]._cancelled,
         lambda: later[0]._finished.is_set(),
     )
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: proc)
     stopped = _bare_worker()
     later.append(stopped)
@@ -1732,9 +1731,9 @@ def test_a_compaction_stopped_before_its_turn_is_named_gives_up_the_thread(monke
     proc = _CompactionStoppedEarly(
         lambda: later[0].cancel(), lambda: bool(later and later[0]._cancelled)
     )
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _b: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda b: b)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _b: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _b: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda b: b)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _b: {})
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: proc)
     worker = agent_backends.CodexWorker(
         "",
@@ -1819,7 +1818,7 @@ def test_a_sweep_never_stops_the_app_server_a_turn_is_speaking_through(monkeypat
     server is shared, so every other tab's turn ended with it, all of its MCP
     children went, and BlindPilot announced the backend had been idle."""
     server = agent_backends.CodexServer(_FakeProc())
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     worker = _bare_worker()
     assert worker._borrow_server() is not None
@@ -1846,7 +1845,7 @@ def test_the_idle_clock_runs_from_the_end_of_a_codex_turn_not_its_start(monkeypa
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     held = backend_pool.HeldProcess(server, agent_backends.codex_adapter(), now=lambda: clock[0])
     backend_pool.pool().keep(key, held)
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
 
     worker = _bare_worker()
     assert worker._borrow_server() is held
@@ -1877,7 +1876,7 @@ def test_a_sweep_between_give_back_and_touch_does_not_reap_a_turn_that_just_ende
     key = backend_pool.pool_key(agent_backends.BACKEND_CODEX)
     held = backend_pool.HeldProcess(server, agent_backends.codex_adapter(), now=lambda: clock[0])
     backend_pool.pool().keep(key, held)
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: server)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: server)
 
     worker = _bare_worker()
     assert worker._borrow_server() is held
@@ -1956,11 +1955,11 @@ def test_a_name_learned_after_the_cancel_gave_up_waiting_is_still_left_behind():
 def test_notes_about_conversations_nobody_resumes_do_not_pile_up():
     """A thread that is never resumed never collects its note."""
     server = agent_backends.CodexServer(_FakeProc())
-    total = agent_backends._CODEX_ABANDONED_THREADS + 10
+    total = codex_worker._CODEX_ABANDONED_THREADS + 10
     for n in range(total):
         server.abandon_turn(f"thread-{n}", f"turn-{n}")
 
-    assert len(server._abandoned) == agent_backends._CODEX_ABANDONED_THREADS
+    assert len(server._abandoned) == codex_worker._CODEX_ABANDONED_THREADS
     assert server.take_abandoned_turns(f"thread-{total - 1}") == {f"turn-{total - 1}"}
 
 
@@ -2061,7 +2060,7 @@ def test_a_death_is_explained_by_this_turns_stderr_and_not_an_earlier_turns(monk
     """The list used to live and die with one turn. Held across fifty of them,
     a death was explained with a warning from turn three -- a wrong reason,
     spoken aloud, to somebody who cannot scroll back and check."""
-    monkeypatch.setattr(agent_backends, "_CODEX_LAST_WORDS_SECONDS", 0.05)
+    monkeypatch.setattr(codex_worker, "_CODEX_LAST_WORDS_SECONDS", 0.05)
     pipe = _StderrPipe()
     proc = _FakeProc()
     proc.stderr = pipe
@@ -2094,14 +2093,14 @@ def test_the_stderr_of_a_process_that_outlives_thousands_of_turns_is_capped():
     proc.stderr = pipe
     server = agent_backends.CodexServer(proc)
     server.start_readers()
-    total = agent_backends._CODEX_STDERR_LINES + 50
+    total = codex_worker._CODEX_STDERR_LINES + 50
     for n in range(total):
         pipe.say(f"line {n}")
     pipe.close()
     server.await_last_words(10)
 
     lines = server.stderr_since(0)
-    assert len(lines) == agent_backends._CODEX_STDERR_LINES, f"kept {len(lines)} lines"
+    assert len(lines) == codex_worker._CODEX_STDERR_LINES, f"kept {len(lines)} lines"
     assert lines[-1] == f"line {total - 1}", "the newest line, which is the one that says why"
     # A turn whose own output overran the cap gets what is left of it, not a
     # slice of somebody else's.
@@ -2229,11 +2228,11 @@ def _capture_launch(monkeypatch, token: str = "tok-secret-value", failure: str =
             return subprocess.CompletedProcess(list(command), 1, "", f"error: {captured.failure}")
         return subprocess.CompletedProcess(list(command), 0, f"{captured.token}\n", "")
 
-    monkeypatch.setattr(agent_backends, "owned_popen", fake_popen)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
-    monkeypatch.setattr(agent_backends, "_run_token_command", fake_token_command)
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda binary: binary)
-    monkeypatch.setattr(agent_backends, "codex_question_args", lambda: ())
+    monkeypatch.setattr(codex_worker, "owned_popen", fake_popen)
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "_run_token_command", fake_token_command)
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda binary: binary)
+    monkeypatch.setattr(codex_worker, "codex_question_args", lambda: ())
     return captured
 
 
@@ -2260,7 +2259,7 @@ def _auth_command(overrides: dict) -> list[str]:
 def test_a_plan_launch_points_codex_at_the_relay_and_fetches_its_token_by_command(monkeypatch):
     captured = _capture_launch(monkeypatch)
 
-    agent_backends._start_codex_server("codex", plan_account=_plan_account())
+    codex_worker._start_codex_server("codex", plan_account=_plan_account())
 
     provider = "model_providers.blindpilot-chatgpt"
     overrides = _overrides(captured.server["args"])
@@ -2302,7 +2301,7 @@ def test_a_packaged_build_runs_itself_for_the_token(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     captured = _capture_launch(monkeypatch)
 
-    agent_backends._start_codex_server("codex", plan_account=_plan_account())
+    codex_worker._start_codex_server("codex", plan_account=_plan_account())
 
     assert _auth_command(_overrides(captured.server["args"])) == [
         sys.executable,
@@ -2315,7 +2314,7 @@ def test_a_token_command_that_fails_reports_it_naming_the_account(monkeypatch):
     captured = _capture_launch(monkeypatch, failure="This account is not signed in to ChatGPT.")
 
     with pytest.raises(OSError) as caught:
-        agent_backends._start_codex_server("codex", plan_account=_plan_account())
+        codex_worker._start_codex_server("codex", plan_account=_plan_account())
 
     reported = str(caught.value)
     assert "Work plan" in reported, "the failure did not say which account it was about"
@@ -2326,7 +2325,7 @@ def test_a_token_command_that_fails_reports_it_naming_the_account(monkeypatch):
 def test_a_launch_without_a_plan_leaves_the_users_own_login_alone(monkeypatch):
     captured = _capture_launch(monkeypatch)
 
-    agent_backends._start_codex_server("codex")
+    codex_worker._start_codex_server("codex")
 
     assert captured.server["args"][0] == "codex"
     assert "-c" not in captured.server["args"], "the user's own config was overridden"
@@ -2404,13 +2403,13 @@ def _launch_on_each_account(monkeypatch, procs: list) -> list:
         launched.append(procs[len(launched)])
         return launched[-1]
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda binary: binary)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
-    monkeypatch.setattr(agent_backends, "codex_question_args", lambda: ())
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda binary: binary)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(codex_worker, "codex_question_args", lambda: ())
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
-        agent_backends,
+        codex_worker,
         "_run_token_command",
         lambda command, **_kwargs: subprocess.CompletedProcess(list(command), 0, "tok\n", ""),
     )
@@ -2611,7 +2610,7 @@ def test_a_turn_running_on_the_account_is_never_dropped_under_it(monkeypatch, tm
     _choose(tmp_path, 7, "Work plan")
     started: list = []
     held = _held_on(7, started)
-    monkeypatch.setattr(agent_backends, "_start_codex_server", lambda **_asked: held)
+    monkeypatch.setattr(codex_worker, "_start_codex_server", lambda **_asked: held)
     turn = _bare_worker()
     assert turn._borrow_server() is not None
 
@@ -2671,7 +2670,7 @@ class _RefusesOnPlan(_FakeProc):
 def _plan_turn(proc, monkeypatch, session_id=None) -> tuple:
     """`_turn`, on a machine whose plan-token command answers as it would."""
     monkeypatch.setattr(
-        agent_backends,
+        codex_worker,
         "_run_token_command",
         lambda command, **_kwargs: subprocess.CompletedProcess(list(command), 0, "tok\n", ""),
     )

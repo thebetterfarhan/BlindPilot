@@ -17,6 +17,7 @@ import threading
 import pytest
 
 import agent_backends
+import codex_worker
 from agent_backends import (
     BACKEND_CODEX,
     CodexWorker,
@@ -144,8 +145,9 @@ def test_codex_reports_a_read_loop_that_raises_instead_of_exiting_in_silence(mon
             return self.returncode
 
     monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
-    monkeypatch.setattr(agent_backends, "_codex_app_server_binary", lambda binary: binary)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "_codex_app_server_binary", lambda binary: binary)
+    monkeypatch.setattr(codex_worker, "subprocess_env", lambda _binary: {})
     monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _Proc())
     assert agent_backends.find_backend_cli(BACKEND_CODEX) == "codex"
 
