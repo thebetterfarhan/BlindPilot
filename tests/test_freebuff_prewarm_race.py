@@ -3,8 +3,9 @@
 import threading
 import time
 
-import agent_backends as ab
 import pytest
+
+import freebuff_terminal as ab
 
 
 def test_posix_terminal_drains_before_worker_adopts_it(monkeypatch):

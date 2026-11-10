@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
 import platform
 import threading
-import ctypes
 
 import pytest
 
-import agent_backends as ab
+import freebuff_terminal
+import freebuff_worker
 import process_utils
 
 pytestmark = pytest.mark.skipif(platform.system() != "Windows", reason="ConPTY is Windows-only")
@@ -84,10 +85,10 @@ def test_the_terminal_is_started_with_the_environment_every_cli_gets(monkeypatch
         seen.update(args=args, cwd=cwd, env=env, rows=rows, cols=cols)
         return _Pty([])
 
-    monkeypatch.setattr(ab, "_ConPtyTerminal", spawn)
+    monkeypatch.setattr(freebuff_terminal, "_ConPtyTerminal", spawn)
     ended = threading.Event()
 
-    ab._spawn_freebuff_pty(["freebuff", "--cwd", "."], ".", ended)
+    freebuff_worker._spawn_freebuff_pty(["freebuff", "--cwd", "."], ".", ended)
 
     assert seen["cwd"] == "."
     assert (seen["rows"], seen["cols"]) == (60, 180)
@@ -99,11 +100,11 @@ def test_a_spawn_that_fails_does_not_leave_the_console_watcher_running(monkeypat
     def spawn(*_args, **_kwargs):
         raise FileNotFoundError("freebuff was removed after discovery")
 
-    monkeypatch.setattr(ab, "_ConPtyTerminal", spawn)
+    monkeypatch.setattr(freebuff_terminal, "_ConPtyTerminal", spawn)
     ended = threading.Event()
 
     with pytest.raises(FileNotFoundError):
-        ab._spawn_freebuff_pty(["freebuff"], ".", ended)
+        freebuff_worker._spawn_freebuff_pty(["freebuff"], ".", ended)
 
     assert ended.is_set(), "hide_terminal polls EnumWindows four times a second until this is set"
 
@@ -113,23 +114,25 @@ def test_the_real_pseudoconsole_runs_a_command_and_reads_it(quiet_console):
     import os
 
     ended = threading.Event()
-    pty, read = ab._spawn_freebuff_pty(
+    pty, read = freebuff_worker._spawn_freebuff_pty(
         [os.environ.get("COMSPEC", "cmd.exe"), "/c", "echo", "conpty-hello"], ".", ended
     )
     text = ""
     while not ended.is_set():
         text += read(5)
-    ab.end_hidden_terminal(pty)
+    freebuff_worker.end_hidden_terminal(pty)
     assert "conpty-hello" in text
 
 
 def test_what_the_terminal_said_on_its_way_out_is_still_read(monkeypatch, quiet_console):
     # The pump looped on isalive(), so a terminal that died at startup had its
     # last line, the one that says why, left unread.
-    monkeypatch.setattr(ab, "_ConPtyTerminal", lambda *_a, **_k: _Pty(["env: node: not found\r\n"]))
+    monkeypatch.setattr(
+        freebuff_terminal, "_ConPtyTerminal", lambda *_a, **_k: _Pty(["env: node: not found\r\n"])
+    )
     ended = threading.Event()
 
-    _pty, read = ab._spawn_freebuff_pty(["freebuff"], ".", ended)
+    _pty, read = freebuff_worker._spawn_freebuff_pty(["freebuff"], ".", ended)
 
     assert ended.wait(3)
     assert read(1) == "env: node: not found\r\n"

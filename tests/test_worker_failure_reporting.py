@@ -18,12 +18,8 @@ import pytest
 
 import agent_backends
 import codex_worker
-from agent_backends import (
-    BACKEND_CODEX,
-    CodexWorker,
-    FreebuffWorker,
-    OpencodeWorker,
-)
+from agent_backends import BACKEND_CODEX, CodexWorker, OpencodeWorker
+from freebuff_worker import FreebuffWorker
 
 WORKERS = [CodexWorker, FreebuffWorker, OpencodeWorker]
 

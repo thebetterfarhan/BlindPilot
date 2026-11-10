@@ -14,6 +14,8 @@ import pytest
 
 import agent_backends
 import codex_worker
+import freebuff_terminal
+import freebuff_worker
 import process_utils
 import questions
 from agent_backends import (
@@ -22,7 +24,6 @@ from agent_backends import (
     BACKEND_FREEBUFF,
     BACKEND_OPENCODE,
     CodexWorker,
-    FreebuffWorker,
     OpencodeWorker,
     backend_auth_ok,
     backend_label,
@@ -33,6 +34,7 @@ from agent_backends import (
     set_freebuff_model,
     worker_class,
 )
+from freebuff_worker import FreebuffWorker
 
 
 @pytest.fixture
@@ -568,7 +570,7 @@ def test_freebuff_rejoins_lines_the_terminal_wrapped():
         "That is the whole of it."
     )
 
-    assert agent_backends._unwrap_screen_text(wrapped) == (
+    assert freebuff_worker._unwrap_screen_text(wrapped) == (
         "Sunlight is made of many colors, and blue scatters more than the others do.\n"
         "That is the whole of it."
     )
@@ -576,14 +578,14 @@ def test_freebuff_rejoins_lines_the_terminal_wrapped():
 
 def test_freebuff_keeps_reading_where_it_left_off_after_the_screen_scrolls():
     """Once the answer is taller than the terminal, the top scrolls away."""
-    assert agent_backends._append_delta("one two three", "one two three four") == "four"
-    assert agent_backends._append_delta("one two three", "two three four") == "four"
-    assert agent_backends._append_delta("one two three", "one two three") == ""
-    assert agent_backends._append_delta("", "one two") == "one two"
+    assert freebuff_worker._append_delta("one two three", "one two three four") == "four"
+    assert freebuff_worker._append_delta("one two three", "two three four") == "four"
+    assert freebuff_worker._append_delta("one two three", "one two three") == ""
+    assert freebuff_worker._append_delta("", "one two") == "one two"
     # The terminal revises where it broke a line as the text below it grows.
     # The same words rewrapped are not new words.
-    assert agent_backends._append_delta("Tips: 1.", "Tips:\n1.") == ""
-    assert agent_backends._append_delta("Tips: 1.", "Tips:\n1. Be clear.") == "Be clear."
+    assert freebuff_worker._append_delta("Tips: 1.", "Tips:\n1.") == ""
+    assert freebuff_worker._append_delta("Tips: 1.", "Tips:\n1. Be clear.") == "Be clear."
 
 
 def test_freebuff_finishes_reading_an_answer_that_scrolled_out_of_view():
@@ -594,11 +596,11 @@ def test_freebuff_finishes_reading_an_answer_that_scrolled_out_of_view():
     """
     answer = "**Rain** falls. It waters the fields. Then it stops."
 
-    assert agent_backends._unspoken_tail("Rain falls. It waters the fields.", answer) == (
+    assert freebuff_worker._unspoken_tail("Rain falls. It waters the fields.", answer) == (
         "Then it stops."
     )
-    assert agent_backends._unspoken_tail(answer, answer) == ""
-    assert agent_backends._unspoken_tail("", answer) == answer
+    assert freebuff_worker._unspoken_tail(answer, answer) == ""
+    assert freebuff_worker._unspoken_tail("", answer) == answer
 
 
 def test_freebuff_prewarmed_terminal_is_only_taken_for_the_message_it_fits():
@@ -618,25 +620,25 @@ def test_freebuff_prewarmed_terminal_is_only_taken_for_the_message_it_fits():
         "before": {"chat-0": 1.0},
         "expires": time.monotonic() + 60,
     }
-    agent_backends._freebuff_prewarm = holding
+    freebuff_terminal._freebuff_prewarm = holding
     try:
         assert (
-            agent_backends._take_freebuff_prewarm("work", "chat-2", "deepseek/deepseek-v4-pro")
+            freebuff_worker._take_freebuff_prewarm("work", "chat-2", "deepseek/deepseek-v4-pro")
             is None
         )
-        assert agent_backends._freebuff_prewarm is None
+        assert freebuff_terminal._freebuff_prewarm is None
         assert holding["ended"].is_set()
 
         holding["ended"] = threading.Event()
-        agent_backends._freebuff_prewarm = holding
-        taken = agent_backends._take_freebuff_prewarm("work", "chat-1", "deepseek/deepseek-v4-pro")
+        freebuff_terminal._freebuff_prewarm = holding
+        taken = freebuff_worker._take_freebuff_prewarm("work", "chat-1", "deepseek/deepseek-v4-pro")
         assert taken is not None
         assert taken["pty"] == "terminal"
         assert taken["before"] == {"chat-0": 1.0}
         assert not taken["ended"].is_set()
-        assert agent_backends._freebuff_prewarm is None
+        assert freebuff_terminal._freebuff_prewarm is None
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
     assert killed == []
 
 
@@ -649,14 +651,14 @@ def test_freebuff_prewarmed_terminal_is_dropped_once_it_is_too_old():
         "before": {},
         "expires": time.monotonic() - 1,
     }
-    agent_backends._freebuff_prewarm = holding
+    freebuff_terminal._freebuff_prewarm = holding
     try:
         assert (
-            agent_backends._take_freebuff_prewarm("work", None, "deepseek/deepseek-v4-pro") is None
+            freebuff_worker._take_freebuff_prewarm("work", None, "deepseek/deepseek-v4-pro") is None
         )
         assert holding["ended"].is_set()
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
 
 
 def test_a_prewarm_before_any_model_was_chosen_fits_the_turn_that_follows(monkeypatch):
@@ -664,25 +666,25 @@ def test_a_prewarm_before_any_model_was_chosen_fits_the_turn_that_follows(monkey
     # on "" while the turn resolved to the preferred model, so the waiting
     # terminal was killed at take every time, and the "" also sent
     # set_freebuff_model scanning the whole binary under the prewarm lock.
-    monkeypatch.setattr(agent_backends, "_freebuff_prewarm", None)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "_read_freebuff_choice", lambda: "")
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_prewarm", None)
+    monkeypatch.setattr(freebuff_terminal, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_terminal, "_read_freebuff_choice", lambda: "")
     chosen: list[str] = []
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", chosen.append)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "set_freebuff_model", chosen.append)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     terminal = object()
     monkeypatch.setattr(
-        agent_backends, "_spawn_freebuff_pty", lambda *_args: (terminal, lambda _timeout: "")
+        freebuff_terminal, "_spawn_freebuff_pty", lambda *_args: (terminal, lambda _timeout: "")
     )
 
-    agent_backends.prewarm_freebuff(".", None, "")
-    _wait_for(lambda: agent_backends._freebuff_prewarm is not None)
+    freebuff_worker.prewarm_freebuff(".", None, "")
+    _wait_for(lambda: freebuff_terminal._freebuff_prewarm is not None)
     try:
-        taken = agent_backends._take_freebuff_prewarm(
+        taken = freebuff_worker._take_freebuff_prewarm(
             ".", None, agent_backends.FREEBUFF_PREFERRED_MODEL
         )
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
 
     assert taken is not None and taken["pty"] is terminal
     assert chosen == [agent_backends.FREEBUFF_PREFERRED_MODEL]
@@ -713,11 +715,11 @@ def test_freebuff_chat_discovery_searches_all_project_buckets(monkeypatch, tmp_p
     chat = project_root / "different-git-root" / "chats" / "session-id"
     chat.mkdir(parents=True)
 
-    found = agent_backends._freebuff_chat_dirs(str(tmp_path / "workspace"))
+    found = freebuff_terminal._freebuff_chat_dirs(str(tmp_path / "workspace"))
 
     assert "session-id" in found
     assert found["session-id"] == chat.stat().st_mtime
-    assert agent_backends._freebuff_chat_path(str(tmp_path / "workspace"), "session-id") == chat
+    assert freebuff_terminal._freebuff_chat_path(str(tmp_path / "workspace"), "session-id") == chat
 
 
 def test_freebuff_structured_chat_reports_progress_and_authoritative_completion(
@@ -749,14 +751,14 @@ def test_freebuff_structured_chat_reports_progress_and_authoritative_completion(
     with log.open("a", encoding="utf-8") as handle:
         handle.write('{"msg":"Main prompt finished"}\n')
 
-    answer_id, thinking, answer, agents = agent_backends._freebuff_chat_snapshot(chat)
+    answer_id, thinking, answer, agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer_id == "ai-1"
     assert thinking == "Inspecting config"
     assert answer == "Configuration updated."
     assert [agent[:3] for agent in agents] == [("tool-1", "basher", "complete")]
-    assert agent_backends._freebuff_run_status(chat, offset) == "complete"
-    assert agent_backends._freebuff_run_status(chat, log.stat().st_size) == ""
+    assert freebuff_worker._freebuff_run_status(chat, offset) == "complete"
+    assert freebuff_worker._freebuff_run_status(chat, log.stat().st_size) == ""
 
 
 def test_freebuff_finished_turn_can_still_hold_an_agent_marked_running(
@@ -812,12 +814,12 @@ def test_freebuff_finished_turn_can_still_hold_an_agent_marked_running(
         encoding="utf-8",
     )
 
-    _answer_id, _thinking, answer, agents = agent_backends._freebuff_chat_snapshot(chat)
+    _answer_id, _thinking, answer, agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer == "Both numbers are 15 and 56."
     assert ("7ObcAqmVj38-0", "basher", "running") in [agent[:3] for agent in agents]
     # The two coexist. The run is over and an agent still says it is going.
-    assert agent_backends._freebuff_run_status(chat) == "complete"
+    assert freebuff_worker._freebuff_run_status(chat) == "complete"
     assert [agent for agent in agents if agent[2] not in ("complete", "completed")]
 
 
@@ -828,7 +830,7 @@ def test_freebuff_structured_chat_reports_interruption(tmp_path):
         '{"msg":"Agent run cancelled by user (abort error)"}\n', encoding="utf-8"
     )
 
-    assert agent_backends._freebuff_run_status(chat) == "cancelled"
+    assert freebuff_worker._freebuff_run_status(chat) == "cancelled"
 
 
 def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tmp_path):
@@ -852,14 +854,14 @@ def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tm
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
 
     # What the worker records before it sends the resumed prompt.
-    assert agent_backends._freebuff_answer_id(chat) == "ai-first"
+    assert freebuff_worker._freebuff_answer_id(chat) == "ai-first"
 
     # FreeBuff opens the next turn with a divider before writing any reply, and
     # the divider must not be mistaken for the turn's answer.
     messages.append({"id": "divider-2", "variant": "ai", "blocks": [{"type": "mode-divider"}]})
     messages.append({"id": "user-2", "variant": "user", "content": "Second"})
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
-    assert agent_backends._freebuff_chat_snapshot(chat)[0] == "ai-first"
+    assert freebuff_worker._freebuff_chat_snapshot(chat)[0] == "ai-first"
 
     messages.append(
         {
@@ -869,7 +871,7 @@ def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tm
         }
     )
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
-    answer_id, _thinking, answer, _agents = agent_backends._freebuff_chat_snapshot(chat)
+    answer_id, _thinking, answer, _agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer_id == "ai-second"
     assert answer == "banana"
@@ -894,7 +896,7 @@ def test_freebuff_snapshot_drops_the_interruption_marker_from_kept_text(tmp_path
     ]
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
 
-    assert agent_backends._freebuff_chat_snapshot(chat)[2] == "apple"
+    assert freebuff_worker._freebuff_chat_snapshot(chat)[2] == "apple"
 
 
 def test_backend_processes_are_launched_without_a_console_window():
@@ -995,13 +997,13 @@ def test_freebuff_reports_a_terminal_that_closes_before_it_is_ready(monkeypatch)
         worker._stream_ended.set()
         return lambda _timeout: ""
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (["deepseek/deepseek-v4-pro"], "deepseek/deepseek-v4-pro", ""),
     )
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(fake_spawn))
 
     worker._do_run()
@@ -1022,9 +1024,9 @@ def test_freebuff_gives_up_on_a_terminal_that_starts_and_then_paints_nothing(mon
     callbacks["on_failed"] = failures.append
     worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
     # Alive, readable, and permanently silent: the terminal never ends and
     # never paints, which is the whole of the failure being reported.
     monkeypatch.setattr(
@@ -1040,19 +1042,19 @@ def test_freebuff_gives_up_on_a_terminal_that_starts_and_then_paints_nothing(mon
 
 def test_freebuff_startup_silence_quotes_the_last_thing_it_showed():
     """A terminal that painted something before going quiet says what."""
-    reason = agent_backends._freebuff_startup_silence("Checking for updates...", 120.0)
+    reason = freebuff_worker._freebuff_startup_silence("Checking for updates...", 120.0)
     assert "Checking for updates..." in reason
     assert "120" in reason
 
 
 def test_freebuff_narrates_only_finished_sentences():
     """Half a sentence read aloud is what makes a streamed run sound broken."""
-    assert agent_backends._complete_sentences("Maple Ridge is a city. Known for its") == (
+    assert freebuff_worker._complete_sentences("Maple Ridge is a city. Known for its") == (
         "Maple Ridge is a city."
     )
-    assert agent_backends._complete_sentences("The user is asking about") == ""
-    assert agent_backends._complete_sentences("First line\nsecond half") == "First line"
-    assert agent_backends._complete_sentences('He said "go." Then') == 'He said "go."'
+    assert freebuff_worker._complete_sentences("The user is asking about") == ""
+    assert freebuff_worker._complete_sentences("First line\nsecond half") == "First line"
+    assert freebuff_worker._complete_sentences('He said "go." Then') == 'He said "go."'
 
 
 # ----- Compaction -----
@@ -2236,7 +2238,7 @@ FREEBUFF_QUESTION_SCREEN = "\n".join(
 
 
 def test_freebuff_reads_the_question_that_is_open_and_counts_the_rest():
-    total, index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    total, index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
 
     assert (total, index) == (2, 0)
     assert question is not None
@@ -2249,7 +2251,7 @@ def test_freebuff_reads_the_question_that_is_open_and_counts_the_rest():
 
 def test_freebuff_checkboxes_mean_the_question_takes_several_answers():
     screen = FREEBUFF_QUESTION_SCREEN.replace("○ Tabs", "☐ Tabs").replace("○ Spaces", "☑ Spaces")
-    _total, _index, question = agent_backends._freebuff_open_question(screen)
+    _total, _index, question = freebuff_worker._freebuff_open_question(screen)
 
     assert question is not None
     assert question.multi_select is True
@@ -2262,12 +2264,12 @@ def test_freebuff_answers_a_question_with_the_keys_its_box_understands():
     )
     worker._write = lambda text: keys.append(text) or True
 
-    _total, _index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    _total, _index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
     assert question is not None
     worker._choose(question, ["Spaces"])
 
     # "Spaces" is the second answer, so one step down and Enter takes it.
-    assert keys == [agent_backends._KEY_DOWN, agent_backends._KEY_ENTER]
+    assert keys == [freebuff_worker._KEY_DOWN, freebuff_worker._KEY_ENTER]
 
 
 def test_freebuff_typed_answer_walks_past_the_options_to_its_own_entry():
@@ -2275,12 +2277,12 @@ def test_freebuff_typed_answer_walks_past_the_options_to_its_own_entry():
     worker = FreebuffWorker("test", None, ".", "default", **_callbacks())
     worker._write = lambda text: keys.append(text) or True
 
-    _total, _index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    _total, _index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
     assert question is not None
     worker._choose(question, ["four spaces, always"])
 
-    down = agent_backends._KEY_DOWN
-    enter = agent_backends._KEY_ENTER
+    down = freebuff_worker._KEY_DOWN
+    enter = freebuff_worker._KEY_ENTER
     assert keys == [down, down, enter, "\x1b[200~four spaces, always\x1b[201~", enter]
 
 
@@ -2294,7 +2296,7 @@ def test_freebuff_a_question_nobody_answered_closes_the_box():
     assert worker._answer_questions(lambda _wait: FREEBUFF_QUESTION_SCREEN) is True
     # Escape is how FreeBuff is told the questions were skipped, which is what
     # it reports to the model.
-    assert keys == [agent_backends._KEY_ESCAPE]
+    assert keys == [freebuff_worker._KEY_ESCAPE]
 
 
 def test_freebuff_stops_asking_once_the_box_stops_changing():
@@ -2319,7 +2321,7 @@ def test_freebuff_start_screen_is_recognised_however_it_is_worded():
     # The chooser is what stands between a hidden terminal and its composer, so
     # missing it costs the whole message, not just the model. Its wording has
     # moved between FreeBuff releases; all of it has to count.
-    picker = agent_backends._FREEBUFF_PICKER_RE
+    picker = freebuff_worker._FREEBUFF_PICKER_RE
     assert picker.search("  RECOMMENDED  DeepSeek V4 Pro")
     assert picker.search("  Start coding for free   1 day streak")
     assert picker.search("  See all 4 models")
@@ -2367,14 +2369,14 @@ def test_a_login_shell_that_misbehaves_costs_only_the_extra_path(monkeypatch):
 def test_freebuff_reports_why_its_terminal_died():
     # "Reinstall BlindPilot" is not something a missing Node can be fixed by,
     # and the terminal said what was actually wrong before it closed.
-    missing_node = agent_backends._freebuff_launch_failure("env: node: No such file or directory")
+    missing_node = freebuff_worker._freebuff_launch_failure("env: node: No such file or directory")
     assert "node" in missing_node.casefold()
     assert "Node.js" in missing_node
 
-    other = agent_backends._freebuff_launch_failure("Error: could not reach the FreeBuff service")
+    other = freebuff_worker._freebuff_launch_failure("Error: could not reach the FreeBuff service")
     assert "could not reach the FreeBuff service" in other
 
-    assert "without saying why" in agent_backends._freebuff_launch_failure("")
+    assert "without saying why" in freebuff_worker._freebuff_launch_failure("")
 
 
 FREEBUFF_EXPANDED_PICKER = """

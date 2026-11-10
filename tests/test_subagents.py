@@ -11,6 +11,7 @@ them itself.
 from types import SimpleNamespace
 
 import agent_backends
+import freebuff_terminal
 from agent_backends import (
     SUBAGENT_COMPLETED,
     SUBAGENT_FAILED,
@@ -516,7 +517,7 @@ def test_command_code_nested_agent_runs_become_an_agent():
 
 
 def test_freebuff_agent_blocks_carry_their_task_and_steps():
-    log = agent_backends._freebuff_agent_log(
+    log = freebuff_terminal._freebuff_agent_log(
         {
             "type": "agent",
             "agentName": "file-picker",

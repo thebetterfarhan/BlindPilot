@@ -18,9 +18,8 @@ what makes it worth reporting rather than leaving.
 
 from __future__ import annotations
 
-
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 # The composer, and a turn in progress. `_PROMPT_RE` looks for the first;
 # `_BUSY_RE` for "Esc to stop".
@@ -70,14 +69,14 @@ def _run(monkeypatch, screens, seconds=1.0, hold=None):
         return read
 
     worker._write = write
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
-    monkeypatch.setattr(agent_backends, "freebuff_model_options", lambda: (["m"], "m", ""))
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "freebuff_model_options", lambda: (["m"], "m", ""))
     # The fake terminal is already booted; the hold itself is covered in
     # test_freebuff_session_drop.py.
-    monkeypatch.setattr(agent_backends, "_freebuff_boot_ready", lambda *_a: True)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_boot_ready", lambda *_a: True)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", seconds)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", seconds)
 
     worker._do_run()
     return turn

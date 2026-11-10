@@ -21,14 +21,14 @@ from __future__ import annotations
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from agent_backends import (
+from agent_backends import _strip_terminal_noise
+from freebuff_terminal import (
     _append_delta,
-    _complete_sentences,
     _keyed,
-    _strip_terminal_noise,
     _unspoken_tail,
     _unwrap_screen_text,
 )
+from markdown_rows import complete_sentences as _complete_sentences
 
 MODEST = settings(max_examples=300, deadline=None)
 

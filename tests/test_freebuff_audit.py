@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends as ab
+import freebuff_terminal
+import freebuff_worker
 import process_utils
 import session_history as history
 from accessible_ai.storage.credentials import CredentialStore
@@ -26,7 +28,7 @@ def _worker(**callbacks):
         "on_done": lambda: None,
     }
     defaults.update(callbacks)
-    return ab.FreebuffWorker("do the work", None, ".", "default", **defaults)
+    return freebuff_worker.FreebuffWorker("do the work", None, ".", "default", **defaults)
 
 
 @pytest.mark.parametrize("mtime", ["broken", [1], {"bad": 1}])
@@ -187,7 +189,7 @@ def test_invalid_settings_are_preserved(monkeypatch, tmp_path):
     settings.parent.mkdir(parents=True)
     settings.write_text('{"importantSetting":', encoding="utf-8")
     with pytest.raises(OSError, match="settings"):
-        ab.set_freebuff_model("a/b")
+        freebuff_worker.set_freebuff_model("a/b")
     assert settings.read_text(encoding="utf-8") == '{"importantSetting":'
     assert not (tmp_path / "choice.json").exists()
 
@@ -211,7 +213,7 @@ def test_repeating_prompt_words_in_the_answer_does_not_move_the_boundary():
 def test_a_resumed_chat_with_no_new_boot_log_is_not_ready(tmp_path):
     log = tmp_path / "log.jsonl"
     log.write_text('{"msg":"Main prompt finished"}\n', encoding="utf-8")
-    assert not ab._freebuff_boot_ready(".", {}, tmp_path, log.stat().st_size)
+    assert not freebuff_worker._freebuff_boot_ready(".", {}, tmp_path, log.stat().st_size)
 
 
 def test_finished_boot_clears_its_initial_disconnect(tmp_path):
@@ -222,12 +224,12 @@ def test_finished_boot_clears_its_initial_disconnect(tmp_path):
         "[send-message] Sending message with sdk run config",
     ]
     log.write_text("\n".join(json.dumps({"msg": event}) for event in events))
-    assert ab._freebuff_run_status(tmp_path) == ""
-    assert ab._freebuff_log_boot_finished(log.read_text())
+    assert freebuff_worker._freebuff_run_status(tmp_path) == ""
+    assert freebuff_terminal._freebuff_log_boot_finished(log.read_text())
     with log.open("a") as handle:
         handle.write("\n" + json.dumps({"msg": events[0]}))
-    assert ab._freebuff_run_status(tmp_path) == "disconnected"
-    assert not ab._freebuff_log_boot_finished(log.read_text())
+    assert freebuff_worker._freebuff_run_status(tmp_path) == "disconnected"
+    assert not freebuff_terminal._freebuff_log_boot_finished(log.read_text())
 
 
 def test_global_history_includes_the_unbucketed_chats(monkeypatch, tmp_path):
@@ -242,10 +244,10 @@ def test_missing_cli_session_fails_without_starting_freebuff(monkeypatch):
     failures = []
     worker = _worker(on_failed=failures.append)
     worker._session_id = "desktop-only-id"
-    monkeypatch.setattr(ab, "find_backend_cli", lambda _: "freebuff")
-    monkeypatch.setattr(ab, "set_freebuff_model", lambda _: None)
-    monkeypatch.setattr(ab, "_freebuff_chat_dirs", lambda _: {})
-    monkeypatch.setattr(ab, "_freebuff_chat_path", lambda *_: None)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda *_: None)
     monkeypatch.setattr(worker, "_spawn_pty", lambda _: pytest.fail("started an unrelated chat"))
     worker._do_run()
     assert failures and "cannot resume" in failures[0]
@@ -258,11 +260,11 @@ def test_a_prewarm_remembers_the_log_offset_before_it_started(monkeypatch, tmp_p
     log = chat / "log.jsonl"
     log.write_text('{"msg":"Main prompt finished"}\n')
     old_size = log.stat().st_size
-    monkeypatch.setattr(ab, "find_backend_cli", lambda _: "freebuff")
-    monkeypatch.setattr(ab, "set_freebuff_model", lambda _: None)
-    monkeypatch.setattr(ab, "_freebuff_chat_dirs", lambda _: {"chat": 1})
-    monkeypatch.setattr(ab, "_freebuff_chat_path", lambda *_: chat)
-    monkeypatch.setattr(ab, "_freebuff_resume_chat_path", lambda *_: chat)
+    monkeypatch.setattr(freebuff_terminal, "find_backend_cli", lambda _: "freebuff")
+    monkeypatch.setattr(freebuff_terminal, "set_freebuff_model", lambda _: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _: {"chat": 1})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda *_: chat)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_resume_chat_path", lambda *_: chat)
 
     def spawn(*_):
         with log.open("a") as handle:
@@ -270,19 +272,21 @@ def test_a_prewarm_remembers_the_log_offset_before_it_started(monkeypatch, tmp_p
         spawned.set()
         return SimpleNamespace(terminate=lambda *_: None, close=lambda *_: None), lambda _: ""
 
-    monkeypatch.setattr(ab, "_spawn_freebuff_pty", spawn)
-    ab.discard_freebuff_prewarm()
+    monkeypatch.setattr(freebuff_terminal, "_spawn_freebuff_pty", spawn)
+    freebuff_terminal.discard_freebuff_prewarm()
     try:
-        ab.prewarm_freebuff(".", "chat", "model")
+        freebuff_terminal.prewarm_freebuff(".", "chat", "model")
         assert spawned.wait(3)
-        holding = ab._take_freebuff_prewarm(".", "chat", "model")
+        holding = freebuff_terminal._take_freebuff_prewarm(".", "chat", "model")
         assert holding is not None
         assert holding["log_offset"] == old_size
-        assert ab._freebuff_boot_ready(".", holding["before"], chat, holding["log_offset"])
+        assert freebuff_terminal._freebuff_boot_ready(
+            ".", holding["before"], chat, holding["log_offset"]
+        )
     finally:
         if "holding" in locals() and holding is not None:
-            ab._end_prewarm(holding)
-        ab.discard_freebuff_prewarm()
+            freebuff_terminal._end_prewarm(holding)
+        freebuff_terminal.discard_freebuff_prewarm()
 
 
 def test_freebuff_prewarm_defers_cli_discovery_and_discards_stale_result(monkeypatch):
@@ -295,21 +299,21 @@ def test_freebuff_prewarm_defers_cli_discovery_and_discards_stale_result(monkeyp
         assert finish_discovery.wait(3)
         return "freebuff"
 
-    monkeypatch.setattr(ab, "find_backend_cli", discover)
-    monkeypatch.setattr(ab, "_spawn_freebuff_pty", lambda *_: spawned.append(True))
-    ab.discard_freebuff_prewarm()
+    monkeypatch.setattr(freebuff_terminal, "find_backend_cli", discover)
+    monkeypatch.setattr(freebuff_terminal, "_spawn_freebuff_pty", lambda *_: spawned.append(True))
+    freebuff_terminal.discard_freebuff_prewarm()
     try:
         started = time.monotonic()
-        ab.prewarm_freebuff(".", None, "model")
+        freebuff_terminal.prewarm_freebuff(".", None, "model")
         assert time.monotonic() - started < 0.2
         assert discovery_started.wait(3)
-        ab.discard_freebuff_prewarm()
+        freebuff_terminal.discard_freebuff_prewarm()
         finish_discovery.set()
         time.sleep(0.05)
         assert spawned == []
     finally:
         finish_discovery.set()
-        ab.discard_freebuff_prewarm()
+        freebuff_terminal.discard_freebuff_prewarm()
 
 
 def test_desktop_history_opens_for_reading_without_a_cli_session(monkeypatch, wx_app):
@@ -381,8 +385,10 @@ def test_chat_discovery_uses_the_terminal_process(monkeypatch, tmp_path):
     for chat, pid in ((ours, 123), (theirs, 456)):
         chat.mkdir()
         (chat / "log.jsonl").write_text(json.dumps({"pid": pid, "msg": "boot"}) + "\n")
-    monkeypatch.setattr(ab, "_freebuff_chat_dirs", lambda _: {"ours": 1, "theirs": 2})
-    monkeypatch.setattr(ab, "_freebuff_chat_path", lambda _, sid: tmp_path / sid)
+    monkeypatch.setattr(
+        freebuff_terminal, "_freebuff_chat_dirs", lambda _: {"ours": 1, "theirs": 2}
+    )
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _, sid: tmp_path / sid)
     monkeypatch.setattr(process_utils, "_descendant_pids", lambda roots: roots | {123})
     worker = _worker()
     worker._pty = SimpleNamespace(pid=122)
@@ -397,17 +403,19 @@ def test_a_chat_in_another_project_cannot_be_resumed(monkeypatch, tmp_path):
     root = tmp_path / ".config/manicode/projects"
     wrong = root / "other/chats/chat"
     wrong.mkdir(parents=True)
-    assert ab._freebuff_chat_path(str(cwd), "chat") == wrong
-    assert ab._freebuff_resume_chat_path(str(cwd), "chat") is None
+    assert freebuff_terminal._freebuff_chat_path(str(cwd), "chat") == wrong
+    assert freebuff_terminal._freebuff_resume_chat_path(str(cwd), "chat") is None
     correct = root / "current/chats/ours"
     correct.mkdir(parents=True)
-    assert ab._freebuff_resume_chat_path(str(cwd), "ours") == correct
+    assert freebuff_terminal._freebuff_resume_chat_path(str(cwd), "ours") == correct
     subfolder = cwd / "nested"
     subfolder.mkdir()
     nested_chat = root / "nested/chats/nested-chat"
     nested_chat.mkdir(parents=True)
-    assert ab._freebuff_resume_chat_path(str(subfolder), "nested-chat") == nested_chat
-    assert ab._freebuff_resume_chat_path(str(subfolder), "ours") is None
+    assert (
+        freebuff_terminal._freebuff_resume_chat_path(str(subfolder), "nested-chat") == nested_chat
+    )
+    assert freebuff_terminal._freebuff_resume_chat_path(str(subfolder), "ours") is None
 
 
 def test_restarting_a_prewarm_handles_the_replacement_model_picker(monkeypatch):
@@ -419,14 +427,18 @@ def test_restarting_a_prewarm_handles_the_replacement_model_picker(monkeypatch):
     monkeypatch.setattr(
         ab, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
     )
-    monkeypatch.setattr(ab, "find_backend_cli", lambda _: "freebuff")
-    monkeypatch.setattr(ab, "set_freebuff_model", lambda _: None)
-    monkeypatch.setattr(ab, "freebuff_model_options", lambda: (["a/selected"], "a/selected", ""))
-    monkeypatch.setattr(ab, "_freebuff_chat_dirs", lambda _: {})
-    monkeypatch.setattr(ab, "_freebuff_chat_path", lambda *_: None)
-    monkeypatch.setattr(ab, "_freebuff_boot_ready", lambda *_: state["generation"] == 1)
-    monkeypatch.setattr(ab, "_FREEBUFF_TURN_SECONDS", 500)
-    monkeypatch.setattr(ab, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 40)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _: None)
+    monkeypatch.setattr(
+        freebuff_worker, "freebuff_model_options", lambda: (["a/selected"], "a/selected", "")
+    )
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda *_: None)
+    monkeypatch.setattr(
+        freebuff_worker, "_freebuff_boot_ready", lambda *_: state["generation"] == 1
+    )
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 500)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 40)
 
     def write(text):
         if text == "\r":
@@ -452,7 +464,7 @@ def test_restarting_a_prewarm_handles_the_replacement_model_picker(monkeypatch):
         return "\x1b[2J\x1b[H" + text.replace("\n", "\r\n")
 
     holding = {"pty": SimpleNamespace(), "read": read, "ended": threading.Event(), "before": {}}
-    monkeypatch.setattr(ab, "_take_freebuff_prewarm", lambda *_: holding)
+    monkeypatch.setattr(freebuff_worker, "_take_freebuff_prewarm", lambda *_: holding)
 
     def restart(_):
         state.update(generation=1, picked=False)
@@ -517,16 +529,16 @@ def test_failed_windows_spawn_releases_every_handle(monkeypatch):
     def fail(*_):
         raise OSError("process creation failed")
 
-    monkeypatch.setattr(ab._ConPtyTerminal, "_create_process", fail)
+    monkeypatch.setattr(freebuff_terminal._ConPtyTerminal, "_create_process", fail)
     with pytest.raises(OSError, match="creation failed"):
-        ab._ConPtyTerminal(["missing.exe"], ".", {}, 60, 180)
+        freebuff_terminal._ConPtyTerminal(["missing.exe"], ".", {}, 60, 180)
     assert set(closed) == {("handle", n) for n in range(1, 5)} | {("pseudo", 5)}
 
 
 def test_teardown_closes_the_output_before_the_pseudoconsole(monkeypatch):
     _, closed = _kernel(monkeypatch)
-    monkeypatch.setattr(ab._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
-    terminal = ab._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
+    monkeypatch.setattr(freebuff_terminal._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
+    terminal = freebuff_terminal._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
     monkeypatch.setattr(terminal, "isalive", lambda: False)
     terminal.close()
     assert closed.index(("handle", 3)) < closed.index(("pseudo", 5))
@@ -534,8 +546,8 @@ def test_teardown_closes_the_output_before_the_pseudoconsole(monkeypatch):
 
 def test_a_closed_terminal_never_uses_its_released_process_handle(monkeypatch):
     kernel, _ = _kernel(monkeypatch)
-    monkeypatch.setattr(ab._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
-    terminal = ab._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
+    monkeypatch.setattr(freebuff_terminal._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
+    terminal = freebuff_terminal._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
     terminal.close()
     called = []
     kernel.GetExitCodeProcess = _Api(lambda *_: called.append("released handle") or 0)
@@ -546,8 +558,8 @@ def test_a_closed_terminal_never_uses_its_released_process_handle(monkeypatch):
 
 def test_ending_the_launcher_also_ends_its_background_children(monkeypatch):
     kernel, _ = _kernel(monkeypatch)
-    monkeypatch.setattr(ab._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
-    terminal = ab._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
+    monkeypatch.setattr(freebuff_terminal._ConPtyTerminal, "_create_process", lambda *_: (6, 123))
+    terminal = freebuff_terminal._ConPtyTerminal(["test.exe"], ".", {}, 60, 180)
     monkeypatch.setattr(terminal, "isalive", lambda: True)
     called = []
     terminal._job = SimpleNamespace(close=lambda: called.append(("job", 123)))
@@ -565,7 +577,9 @@ def test_batch_launcher_in_a_spaced_directory(monkeypatch, tmp_path, name):
     script.write_text('@echo spaced-launcher-works\r\n@echo "%~2"\r\n', encoding="utf-8")
     monkeypatch.setattr(process_utils, "hide_console_windows", lambda *_: 0)
     ended = threading.Event()
-    terminal, read = ab._spawn_freebuff_pty([str(script), "--cwd", str(folder)], str(folder), ended)
+    terminal, read = freebuff_worker._spawn_freebuff_pty(
+        [str(script), "--cwd", str(folder)], str(folder), ended
+    )
     output = ""
     try:
         while not ended.is_set():
@@ -573,6 +587,6 @@ def test_batch_launcher_in_a_spaced_directory(monkeypatch, tmp_path, name):
         while chunk := read(0):
             output += chunk
     finally:
-        ab.end_hidden_terminal(terminal)
+        freebuff_worker.end_hidden_terminal(terminal)
     assert "spaced-launcher-works" in output
     assert str(folder) in output

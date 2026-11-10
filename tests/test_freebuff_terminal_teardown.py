@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import threading
 
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 
 class _FakeTerminal:
@@ -32,7 +32,7 @@ class _FakeTerminal:
 def test_killing_a_terminal_closes_it_as_well_as_ending_it():
     terminal = _FakeTerminal()
 
-    agent_backends.end_hidden_terminal(terminal)
+    freebuff_worker.end_hidden_terminal(terminal)
 
     assert terminal.calls == ["terminate", "close"], (
         "a terminate that worked left the pseudo-terminal open"
@@ -49,7 +49,7 @@ def test_a_terminal_that_will_not_terminate_is_still_closed():
 
     terminal = _Stuck()
 
-    agent_backends.end_hidden_terminal(terminal)
+    freebuff_worker.end_hidden_terminal(terminal)
 
     assert terminal.calls == ["terminate", "close"]
 
