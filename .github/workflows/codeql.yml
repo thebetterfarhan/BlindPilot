@@ -6,7 +6,10 @@ name: CodeQL
 # by a run that nobody pushed for.
 on:
   push:
-    branches: [main]
+    # Every branch, not only the default one. A long-lived branch is where the
+    # riskiest code sits - it is the code nobody has reviewed yet - and scanning
+    # it only after it merges is scanning it too late to matter.
+    branches: ["**"]
   pull_request:
     branches: [main]
   schedule:

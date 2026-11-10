@@ -10,6 +10,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nothing pushed means nothing tested, and a flaky test is only found by
+  # running it. The suite has already produced two failures that appeared on
+  # one platform in one run in several; a nightly run on the default branch
+  # finds that class without waiting for somebody to push on a hunch.
+  # 04:10 UTC is after CodeQL's Monday 02:30 slot, so the two do not compete.
+  schedule:
+    - cron: "10 4 * * *"
   workflow_dispatch:
 
 # A branch pushed twice in quick succession only needs its newest commit

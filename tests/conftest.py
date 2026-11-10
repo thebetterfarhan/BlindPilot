@@ -15,6 +15,28 @@ import backend_pool
 
 
 @pytest.fixture(autouse=True)
+def no_git_context_leaks_into_a_test(monkeypatch):
+    """Run every test as though it were started from a plain shell.
+
+    Git sets `GIT_DIR` for the processes it runs, which includes the pre-commit
+    and pre-push hooks. That variable overrides the upward search for a
+    repository: a test asking "does this folder outside git behave like this?"
+    gets *this* checkout instead, because `GIT_DIR` outranks
+    `GIT_CEILING_DIRECTORIES`. The symptom is a test that passes when run by
+    hand and fails only under the hook, which is exactly where nobody looks.
+
+    This also protects the checkout: with `GIT_DIR` set, a test that runs
+    `git init` or `git worktree add` in a temporary folder operates on the real
+    repository instead, and `git add .` there stages the whole tree.
+
+    Cleared for every test rather than in the two that noticed, because any test
+    that shells out to git can be skewed the same way.
+    """
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def diagnostics_stay_out_of_the_real_log(monkeypatch):
     """Keep everything a test writes down out of the installed app's own log.
 
