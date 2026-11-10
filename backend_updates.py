@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 import agent_backends
+import backend_probes
 import process_utils
 
 
@@ -88,7 +89,7 @@ def _run_version_probe(binary: str) -> str:
             errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
-            env=agent_backends.subprocess_env(binary),
+            env=backend_probes.subprocess_env(binary),
             **process_utils.no_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -108,7 +109,7 @@ def _run_npm_metadata(npm: str, package: str) -> Optional[str]:
             errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
-            env=agent_backends.subprocess_env(npm),
+            env=backend_probes.subprocess_env(npm),
             **process_utils.no_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -214,7 +215,7 @@ class BackendUpdateService:
         adapter = self._adapters.get(backend)
         if adapter is None:
             return self._failed(backend, "backend is not registered", checked_at)
-        binary = agent_backends.find_backend_cli(backend)
+        binary = backend_probes.find_backend_cli(backend)
         if not binary:
             return BackendUpdateResult(
                 backend,

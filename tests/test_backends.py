@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends
+import backend_probes
 import opencode_worker
 import codex_worker
 import freebuff_terminal
@@ -72,7 +73,7 @@ def test_backend_names_are_normalized_and_claude_is_the_fallback():
 def test_freebuff_auth_requires_a_complete_parseable_credential(monkeypatch, tmp_path, fake_home):
     credential = tmp_path / ".config" / "manicode" / "credentials.json"
     credential.parent.mkdir(parents=True)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
 
     credential.write_text("not json", encoding="utf-8")
     assert not backend_auth_ok(BACKEND_FREEBUFF)
@@ -129,7 +130,7 @@ def test_codex_catalog_includes_all_reported_reasoning_levels(monkeypatch, tmp_p
             }
         ]
     }
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(
         agent_backends.subprocess,
@@ -205,7 +206,7 @@ def test_codex_offers_only_the_models_the_service_still_lists(monkeypatch, tmp_p
         ]
     }
     run, calls = _codex_models_run({(): live, ("--bundled",): bundled})
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
@@ -225,7 +226,7 @@ def test_codex_falls_back_to_the_installed_copy_when_the_service_is_unreachable(
 ):
     bundled = {"models": [{"slug": "gpt-6-sol", "visibility": "list"}]}
     run, calls = _codex_models_run({("--bundled",): bundled})
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
@@ -357,7 +358,7 @@ def test_freebuff_catalog_is_discovered_at_runtime_and_preferred_is_default(
     # BlindPilot's own config lives under APPDATA on Windows, and selecting a
     # model writes there, so it has to be redirected as well as the home path.
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -394,7 +395,7 @@ def test_freebuff_catalog_keeps_the_current_off_peak_preferred_model(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -431,7 +432,7 @@ def test_freebuff_catalog_keeps_a_model_the_readme_names_without_its_date(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -463,7 +464,7 @@ def test_freebuff_falls_back_to_preferred_rather_than_freebuffs_own_setting(
     settings.write_text(json.dumps({"freebuffModel": "deepseek/deepseek-v4-flash"}), "utf-8")
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     _models, current, _error = freebuff_model_options()
@@ -695,7 +696,7 @@ def test_a_powershell_script_is_not_offered_as_a_cli(monkeypatch, tmp_path):
     # Popen cannot run a .ps1 (WinError 193), so finding one is worse than
     # finding nothing: every turn fails instead of the wizard offering to install.
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(agent_backends, "blindpilot_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(backend_probes, "blindpilot_data_dir", lambda: tmp_path / "data")
     monkeypatch.setattr(agent_backends.Path, "home", classmethod(lambda cls: tmp_path / "home"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
@@ -927,7 +928,7 @@ def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
         captured.update(kwargs)
         raise OSError("stop here; the launch arguments are what matter")
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     failures: list[str] = []
     callbacks = _callbacks()
@@ -967,7 +968,7 @@ def test_freebuff_keeps_its_choice_when_freebuff_resets_its_own_setting(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     # FreeBuff has left its own recommendation behind and BlindPilot has no
@@ -1124,7 +1125,7 @@ class _ScriptedCodexServer:
 def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     """Codex has no /compact message, so sending one as text would do nothing."""
     server = _ScriptedCodexServer()
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: server)
     completed: list[str] = []
@@ -1146,7 +1147,7 @@ def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
 
 
 def test_codex_will_not_compact_a_conversation_that_has_not_started(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
@@ -1954,7 +1955,7 @@ def test_opencode_server_is_reached_over_loopback_behind_a_password(monkeypatch)
 
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(opencode_worker, "_free_port", lambda: 41234)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
 
@@ -1988,7 +1989,7 @@ def test_a_port_taken_before_the_child_binds_is_retried_on_a_fresh_one(monkeypat
     ports = iter([41234, 41235])
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(opencode_worker, "_free_port", lambda: next(ports))
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
 
@@ -2335,9 +2336,9 @@ def test_a_cli_is_started_with_a_path_that_can_reach_node(monkeypatch):
     # shim. Handing a child that bare PATH is how FreeBuff died before it drew
     # a single frame, so the environment must carry both the CLI's own folder
     # and whatever a terminal would have had.
-    monkeypatch.setattr(agent_backends, "_login_shell_path", None)
+    monkeypatch.setattr(backend_probes, "_login_shell_path", None)
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "login_shell_path_dirs",
         lambda: ["/opt/homebrew/bin", "/usr/bin"],
     )
@@ -2355,7 +2356,7 @@ def test_a_cli_is_started_with_a_path_that_can_reach_node(monkeypatch):
 
 
 def test_a_login_shell_that_misbehaves_costs_only_the_extra_path(monkeypatch):
-    monkeypatch.setattr(agent_backends, "_login_shell_path", None)
+    monkeypatch.setattr(backend_probes, "_login_shell_path", None)
     monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.setattr(agent_backends.os.path, "isfile", lambda _path: True)
 
@@ -2421,14 +2422,14 @@ def test_a_model_the_installed_release_dropped_is_not_offered(monkeypatch, tmp_p
     # FreeBuff removes models between releases. Continuing to offer one it has
     # dropped means picking it, waiting out a picker that will never show it,
     # and losing the message.
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_models_from_install",
         lambda _binary: ["openai/gpt-5.6-luna", "mimo/mimo-v2.5"],
     )
     monkeypatch.setattr(
-        agent_backends, "_read_freebuff_choice", lambda: agent_backends.FREEBUFF_PREFERRED_MODEL
+        backend_probes, "_read_freebuff_choice", lambda: agent_backends.FREEBUFF_PREFERRED_MODEL
     )
 
     models, current, error = freebuff_model_options()
@@ -2441,9 +2442,9 @@ def test_a_model_the_installed_release_dropped_is_not_offered(monkeypatch, tmp_p
 def test_a_catalog_that_could_not_be_read_still_offers_the_remembered_model(
     monkeypatch, tmp_path, fake_home
 ):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "_freebuff_models_from_install", lambda _binary: [])
-    monkeypatch.setattr(agent_backends, "_read_freebuff_choice", lambda: "vendor/remembered")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "_freebuff_models_from_install", lambda _binary: [])
+    monkeypatch.setattr(backend_probes, "_read_freebuff_choice", lambda: "vendor/remembered")
 
     models, current, error = freebuff_model_options()
 
@@ -2720,8 +2721,8 @@ def test_a_probe_keeps_stderr_when_stdout_also_said_something(monkeypatch):
     """A CLI that painted a banner and then failed used to lose the failure."""
     import sys
 
-    monkeypatch.setattr(agent_backends, "login_shell_path_dirs", list)
-    code, text = agent_backends._probe_backend(
+    monkeypatch.setattr(backend_probes, "login_shell_path_dirs", list)
+    code, text = backend_probes._probe_backend(
         sys.executable,
         [
             "-c",
@@ -2782,7 +2783,7 @@ def _status_lines(report: str) -> dict[str, str]:
 
 
 def test_status_says_so_when_the_backend_is_not_installed(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: None)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: None)
     for backend in agent_backends.BACKEND_IDS:
         fields = _status_lines(backend_status(backend))
         assert fields["Backend"] == backend_label(backend)
@@ -2791,9 +2792,9 @@ def test_status_says_so_when_the_backend_is_not_installed(monkeypatch):
 
 def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fake_home):
     """Whichever backend is selected, the report answers the same question."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9")
@@ -2812,14 +2813,14 @@ def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fa
     data = tmp_path / "opencode-data"
     data.mkdir()
     (data / "auth.json").write_text(json.dumps({"anthropic": {"type": "api"}}), encoding="utf-8")
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     _hermes_pool(monkeypatch, tmp_path, {"anthropic": [{"id": "1", "label": "claude_code"}]})
     # Muse, like Hermes above, gets an adapter-level answer rather than the
     # machine's real one (this machine has a live WSL Muse and its account).
-    monkeypatch.setattr(agent_backends, "_muse_signed_in_checked", lambda: True)
-    monkeypatch.setattr(agent_backends, "_muse_version_probe", lambda: "9.9.9")
-    monkeypatch.setattr(agent_backends, "_muse_account_lines", lambda: ["Signed in: yes"])
+    monkeypatch.setattr(backend_probes, "_muse_signed_in_checked", lambda: True)
+    monkeypatch.setattr(backend_probes, "_muse_version_probe", lambda: "9.9.9")
+    monkeypatch.setattr(backend_probes, "_muse_account_lines", lambda: ["Signed in: yes"])
     # muse.ai answers `muse-cli status` from its gateway; the fake stands in
     # for the user's real cloud agent.
     import museai_backend
@@ -2844,9 +2845,9 @@ def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fa
 
 def test_status_reads_the_account_out_of_claude_auth_status(monkeypatch):
     """Claude Code's auth status answers in JSON, which is where the account is."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "2.1.257 (Claude Code)")
@@ -2878,9 +2879,9 @@ def test_status_reads_the_account_out_of_claude_auth_status(monkeypatch):
 
 
 def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, tmp_path, fake_home):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9") if args == ["--version"] else (1, '{"loggedIn": false}')
@@ -2888,7 +2889,7 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
     )
     empty = tmp_path / "opencode-empty"
     empty.mkdir()
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: empty)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: empty)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -2897,9 +2898,9 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
     # Muse reads its credentials off disk and its version through WSL; both
     # are pointed at nothing, the same way every other backend is fenced off
     # from the real machine this suite runs on.
-    monkeypatch.setattr(agent_backends, "_muse_signed_in_checked", lambda: False)
-    monkeypatch.setattr(agent_backends, "_muse_version_probe", lambda: "")
-    monkeypatch.setattr(agent_backends, "_muse_account_lines", lambda: ["Signed in: no"])
+    monkeypatch.setattr(backend_probes, "_muse_signed_in_checked", lambda: False)
+    monkeypatch.setattr(backend_probes, "_muse_version_probe", lambda: "")
+    monkeypatch.setattr(backend_probes, "_muse_account_lines", lambda: ["Signed in: no"])
 
     for backend in agent_backends.BACKEND_IDS:
         fields = _status_lines(backend_status(backend))
@@ -2909,9 +2910,9 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
 
 def test_status_keeps_a_providers_own_words_when_it_stops_answering_in_json(monkeypatch):
     """A future Claude Code that drops the JSON still has something to say."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9") if args == ["--version"] else (0, "Logged in as person@example.com")
@@ -2924,9 +2925,9 @@ def test_status_keeps_a_providers_own_words_when_it_stops_answering_in_json(monk
 
 def test_status_separates_a_no_from_a_provider_that_could_not_be_asked(monkeypatch):
     """A CLI that will not run at all is a different answer from signed out."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (0, "9.9.9") if args == ["--version"] else (None, ""),
     )
@@ -2935,9 +2936,9 @@ def test_status_separates_a_no_from_a_provider_that_could_not_be_asked(monkeypat
 
 
 def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "opencode")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "opencode")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.18.25")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.18.25")
     )
     data = tmp_path / "opencode-data"
     data.mkdir()
@@ -2945,7 +2946,7 @@ def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp
         json.dumps({"opencode-go": {"type": "api"}, "anthropic": {"type": "oauth"}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     fields = _status_lines(backend_status(BACKEND_OPENCODE))
     assert fields["Connected providers"] == "anthropic, opencode-go"
@@ -2954,9 +2955,9 @@ def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp
 def test_status_reports_the_freebuff_account_from_its_stored_credentials(
     monkeypatch, tmp_path, fake_home
 ):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "0.0.163")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "0.0.163")
     )
     credential = tmp_path / ".config" / "manicode" / "credentials.json"
     credential.parent.mkdir(parents=True)
@@ -2991,7 +2992,7 @@ def _usage_labels(lines: list[str]) -> list[str]:
 def test_usage_reports_the_windows_claude_code_names_and_no_others(monkeypatch):
     """A plan window the account does not have is left out, not written as unknown."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,
@@ -3014,7 +3015,7 @@ def test_usage_reports_the_windows_claude_code_names_and_no_others(monkeypatch):
 
 def test_usage_puts_the_accounts_own_weekly_window_before_one_models(monkeypatch):
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,
@@ -3039,7 +3040,7 @@ def test_usage_puts_the_accounts_own_weekly_window_before_one_models(monkeypatch
 def test_usage_says_nothing_when_the_plan_windows_do_not_apply(monkeypatch):
     """An API key, Bedrock or Vertex session is metered by none of this."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {"rate_limits_available": False, "rate_limits": None},
     )
@@ -3047,15 +3048,15 @@ def test_usage_says_nothing_when_the_plan_windows_do_not_apply(monkeypatch):
 
 
 def test_usage_says_nothing_when_the_backend_could_not_be_asked(monkeypatch):
-    monkeypatch.setattr(agent_backends, "_claude_usage_payload", lambda _binary, _timeout: None)
-    monkeypatch.setattr(agent_backends, "_codex_usage_result", lambda _binary, _timeout: None)
+    monkeypatch.setattr(backend_probes, "_claude_usage_payload", lambda _binary, _timeout: None)
+    monkeypatch.setattr(backend_probes, "_codex_usage_result", lambda _binary, _timeout: None)
     assert agent_backends.backend_usage_lines(BACKEND_CLAUDE, "claude") == []
     assert agent_backends.backend_usage_lines(BACKEND_CODEX, "codex") == []
 
 
 def test_usage_names_a_codex_window_by_its_length_not_its_position():
     """Codex's `primary` is the weekly window on some plans and the five-hour one on others."""
-    windows = agent_backends._codex_usage_windows(
+    windows = backend_probes._codex_usage_windows(
         {
             "rateLimits": {
                 "limitName": None,
@@ -3113,7 +3114,7 @@ def test_usage_keeps_two_codex_windows_that_would_be_called_the_same_thing():
     report two real windows that no name can tell apart. Losing one of those
     would lose a limit rather than a duplicate.
     """
-    windows = agent_backends._codex_usage_windows(
+    windows = backend_probes._codex_usage_windows(
         {
             "rateLimits": {
                 "limitName": None,
@@ -3153,7 +3154,7 @@ def test_usage_keeps_two_codex_windows_that_would_be_called_the_same_thing():
 def test_usage_reports_the_freebuff_credit_balance_and_when_the_cycle_refills(monkeypatch):
     """FreeBuff counts credits rather than filling a window, and says so."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_usage_payload",
         lambda _timeout: {
             "type": "usage-response",
@@ -3174,7 +3175,7 @@ def test_usage_reports_the_freebuff_credit_balance_and_when_the_cycle_refills(mo
 def test_usage_says_what_is_left_even_when_the_cycle_held_nothing(monkeypatch):
     """An empty balance has no fraction to report, and still has a figure."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_usage_payload",
         lambda _timeout: {"usage": 0, "remainingBalance": 0, "next_quota_reset": None},
     )
@@ -3184,14 +3185,14 @@ def test_usage_says_what_is_left_even_when_the_cycle_held_nothing(monkeypatch):
 
 # Held before the fixture that keeps the rest of the suite off the network
 # replaces it, so the reading itself can still be exercised.
-_REAL_FREEBUFF_USAGE_PAYLOAD = agent_backends._freebuff_usage_payload
+_REAL_FREEBUFF_USAGE_PAYLOAD = backend_probes._freebuff_usage_payload
 
 
 def test_the_freebuff_balance_is_not_asked_for_when_nobody_is_signed_in(monkeypatch):
     """Signed out there is nothing to ask with, so no request is made."""
     reached = []
-    monkeypatch.setattr(agent_backends, "_freebuff_account", lambda: None)
-    monkeypatch.setattr(agent_backends, "_freebuff_app_url", lambda: reached.append("url") or "")
+    monkeypatch.setattr(backend_probes, "_freebuff_account", lambda: None)
+    monkeypatch.setattr(backend_probes, "_freebuff_app_url", lambda: reached.append("url") or "")
     assert _REAL_FREEBUFF_USAGE_PAYLOAD(5) is None
     assert reached == []
 
@@ -3253,14 +3254,14 @@ def test_status_names_the_providers_hermes_signed_in_to_rather_than_opencodes(
     monkeypatch, tmp_path
 ):
     """Hermes holds a credential per provider, and the report names its own."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "hermes")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "hermes")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.2.3")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.2.3")
     )
     data = tmp_path / "opencode-data"
     data.mkdir()
     (data / "auth.json").write_text(json.dumps({"opencode-go": {"type": "api"}}), encoding="utf-8")
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     _hermes_pool(
         monkeypatch,
         tmp_path,
@@ -3274,16 +3275,16 @@ def test_status_names_the_providers_hermes_signed_in_to_rather_than_opencodes(
 
 
 def test_status_carries_the_usage_windows(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "2.1.263 (Claude Code)") if args == ["--version"] else (0, '{"loggedIn": true}')
         ),
     )
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,

@@ -238,6 +238,25 @@ def test_the_installer_and_updater_tables_live_in_installers():
     assert not hasattr(blindpilot_app, "WINDOWS_INSTALL_PS1_URL")
 
 
+def test_backend_registry_does_not_import_backend_probes():
+    """The registry must not pull in probe utilities.
+
+    Keeping the boundary one-way means the registry can be imported cheaply
+    at startup, and the probes can import freely from the registry without a
+    cycle.
+    """
+    source = (Path(__file__).resolve().parent.parent / "backend_registry.py").read_text(
+        encoding="utf-8"
+    )
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "backend_probes" not in imported
+
+
 def test_installers_never_imports_the_window_module():
     """The dependency runs one way: the window imports the installer.
 
