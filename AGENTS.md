@@ -4,8 +4,17 @@ Screen-reader-first desktop app that runs AI coding CLIs in normal windows.
 Accessibility is core behavior, not an extra: keyboard-only operation and NVDA,
 JAWS, and VoiceOver speech are part of the product.
 
-The global policy in `~/.codex/AGENTS.md` applies; this file adds only what is
+The global policy in `~/.claude/CLAUDE.md` applies; this file adds only what is
 local to BlindPilot.
+
+## Setup
+
+After cloning, install the pre-commit hooks:
+
+```sh
+pre-commit install
+pre-commit install --hook-type pre-push
+```
 
 ## Inner loop
 
@@ -55,7 +64,7 @@ gated, only execution.
 | File(s) | What lives there |
 |---|---|
 | `blindpilot_app.py` | The main window, all tabs, every dialog, the row renderer. 17 k lines — the monolith. |
-| `agent_backends.py` | Backend registry, status probes, lazy re-exports (see below). |
+| `agent_backends.py` | Backend registry, status probes, lazy re-exports (see below). `_TurnWorker` (same file) is the base class all workers extend; subclasses provide `_backend`, `_do_run`, `_setup`, and optionally `_teardown` and `_fail`. |
 | `*_backend.py` | Per-backend discovery, auth, model listing, and account helpers. |
 | `*_worker.py` | Per-backend `AgentWorker` subclass that owns the subprocess. |
 | `backend_pool.py` | Held-process pool for backends that keep a process alive between turns. |
