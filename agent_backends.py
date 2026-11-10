@@ -39,7 +39,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Callable, NamedTuple, Optional, Protocol, Sequence
+from typing import IO, Any, Callable, NamedTuple, Optional, Protocol, Sequence
 
 import diagnostics
 import questions
@@ -2963,7 +2963,7 @@ _OPENCODE_WORKER_REEXPORTS = frozenset(
 )
 
 
-def __getattr__(name: str) -> object:
+def __getattr__(name: str) -> Any:
     if name in _CODEX_WORKER_REEXPORTS:
         import codex_worker as _cw
 

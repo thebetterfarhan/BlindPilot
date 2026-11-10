@@ -2890,6 +2890,9 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
     empty.mkdir()
     monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: empty)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     _hermes_pool(monkeypatch, tmp_path, {})
     # Muse reads its credentials off disk and its version through WSL; both
     # are pointed at nothing, the same way every other backend is fenced off

@@ -16434,7 +16434,8 @@ class MainFrame(wx.Frame):
         """Give the progress bar the real transcript count once it is known."""
         if not self or serial != getattr(self, "_find_all_serial", None):
             return
-        if progress is getattr(self, "_find_all_progress", None):
+        stored = getattr(self, "_find_all_progress", None)
+        if stored is not None and progress is stored:
             progress.SetRange(total)
 
     def _find_all_progress_update(
@@ -16449,7 +16450,8 @@ class MainFrame(wx.Frame):
         if not self or serial != getattr(self, "_find_all_serial", None):
             cancel.set()
             return
-        if progress is not getattr(self, "_find_all_progress", None):
+        stored_progress = getattr(self, "_find_all_progress", None)
+        if stored_progress is None or progress is not stored_progress:
             cancel.set()
             return
         if not progress.Update(done, f"Searching {title}")[0]:
