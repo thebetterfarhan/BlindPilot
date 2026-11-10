@@ -73,6 +73,7 @@ def test_partial_normal_answer_is_saved_with_an_interruption_marker(chat, interr
     if interrupted == "cancel":
         panel.generation_cancel.set()
     panel._generation_finished(ProviderError("lost connection") if interrupted == "error" else None)
+    _wait(lambda: not panel._response_save_running)
     saved = db.list_messages(cid)
     assert saved[-1].role == "assistant"
     assert saved[-1].content.startswith("A useful partial answer")
@@ -92,11 +93,16 @@ def test_storage_failure_releases_controls_and_retries_before_leaving(chat, monk
 
         patch.setattr(db, "add_message", failed_commit)
         panel._generation_finished(None)
+        _wait(lambda: not panel._response_save_running)
         assert not panel.generating
         assert panel.assistant_buffer == "Keep this completed answer"
         panel.on_new_conversation(None)
+        _wait(lambda: not panel._response_save_running)
         assert panel.current_conversation_id == cid
     panel.on_new_conversation(None)
+    _wait(lambda: not panel._response_save_running)
+    panel.on_new_conversation(None)
+    _wait(lambda: panel.current_conversation_id is None)
     assert panel.current_conversation_id is None
     assert db.list_messages(cid)[-1].content == "Keep this completed answer"
     assert panel._unsaved_response is None
@@ -299,6 +305,7 @@ def test_interrupted_regeneration_keeps_previous_completed_answer(chat, interrup
     cid = _begin(panel, first)
     original = Message(conversation_id=cid, role="assistant", content="Previous answer")
     db.add_message(original)
+    panel._regeneration_history = db.list_messages(cid)
     panel.regenerating_message_id = original.id
     panel.assistant_buffer = "Replacement fragment"
     if interrupted == "cancel":
