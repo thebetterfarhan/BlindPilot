@@ -365,3 +365,37 @@ def test_cancel_closes_a_real_silent_http_stream():
         server.shutdown()
         server.server_close()
         serving.join(3)
+
+
+def test_stop_before_streaming_still_closes_the_response():
+    import httpx
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from accessible_ai.providers.base import iter_sse_json
+
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.flush()
+            release.wait(3)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with httpx.Client(trust_env=False, timeout=2) as client:
+            with client.stream("GET", f"http://127.0.0.1:{server.server_port}/") as response:
+                cancel = threading.Event()
+                cancel.set()
+                assert list(iter_sse_json(response, cancel)) == []
+                assert response.is_closed
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
