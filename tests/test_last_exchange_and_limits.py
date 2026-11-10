@@ -48,13 +48,18 @@ def test_the_box_follows_the_selection_and_ignores_a_late_answer(frame, monkeypa
             first = dialog._shown[0]
             assert dialog._preview_for == first
             assert dialog.preview.GetValue() == "Reading…"
+            stale_request = dialog._preview_cancel
+            assert stale_request is not None
             dialog.list_box.SetSelection(1)
             selection = wx.CommandEvent(wx.wxEVT_LISTBOX, dialog.list_box.GetId())
             selection.SetEventObject(dialog.list_box)
             dialog.list_box.GetEventHandler().ProcessEvent(selection)
-            dialog._show_preview(first, "stale")
+            assert stale_request.is_set()
+            dialog._show_preview(first, stale_request, "stale")
             assert dialog.preview.GetValue() == "Reading…"
-            dialog._show_preview(dialog._shown[1], "You: hi")
+            current_request = dialog._preview_cancel
+            assert current_request is not None
+            dialog._show_preview(dialog._shown[1], current_request, "You: hi")
             assert dialog.preview.GetValue() == "You: hi"
         finally:
             dialog._preview_timer.Stop()

@@ -89,10 +89,11 @@ def test_a_preview_load_finishing_after_the_app_is_gone_is_not_posted(monkeypatc
     queued: list = []
     _gone_app(monkeypatch, queued)
     monkeypatch.setattr(app.threading, "Thread", _Thread)
-    monkeypatch.setattr(app, "load_turns", lambda entry: "the last exchange")
+    monkeypatch.setattr(app, "load_turns", lambda entry, *, cancelled=None: "the last exchange")
     dialog = type("Dialog", (), {})()
     dialog._preview_for = object()
-    dialog._show_preview = lambda entry, text: None
+    dialog._preview_cancel = app.threading.Event()
+    dialog._show_preview = lambda entry, cancel, text: None
 
     app.HistoryDialog._load_preview(dialog)
 
