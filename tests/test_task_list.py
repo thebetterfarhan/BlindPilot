@@ -173,6 +173,50 @@ def test_prepared_history_contains_turns_and_replayed_tasks(tmp_path):
     assert [(turn.prompt, turn.response) for turn in prepared.turns] == [("Ship this", "Done.")]
     assert prepared.tasks.lines() == ["1. To do: Verify the release"]
     assert prepared.task_warning == ""
+    assert [(row.kind, row.response_number) for row in prepared.rows] == [
+        ("you", 1),
+        ("header", 1),
+        ("prose", 1),
+    ]
+
+
+def test_prepared_history_rows_preserve_empty_turn_numbering_and_cancel(monkeypatch):
+    import session_history
+
+    turns = [
+        session_history.HistoryTurn("", "First"),
+        session_history.HistoryTurn("Second", "Answer"),
+    ]
+    parsed = 0
+    checks = 0
+    import markdown_rows
+
+    real_markdown_parse = markdown_rows._MD.parse
+
+    def parse_markdown(*args, **kwargs):
+        nonlocal parsed
+        parsed += 1
+        return real_markdown_parse(*args, **kwargs)
+
+    def cancelled():
+        nonlocal checks
+        checks += 1
+        return checks >= 8
+
+    monkeypatch.setitem(
+        session_history._READERS, session_history.BACKEND_CLAUDE, lambda *_args, **_kwargs: turns
+    )
+    monkeypatch.setattr(markdown_rows._MD, "parse", parse_markdown)
+    prepared = session_history.prepare_history_open(
+        session_history.HistoryEntry("claude", "s", "t", "", 0), cancelled=lambda: False
+    )
+    assert [row.response_number for row in prepared.rows] == [1, 1, 2, 2, 2]
+    parsed = 0
+    with pytest.raises(session_history.HistoryOpenCancelled):
+        session_history.prepare_history_open(
+            session_history.HistoryEntry("claude", "s", "t", "", 0), cancelled=cancelled
+        )
+    assert parsed == 1
 
 
 def test_jsonl_reader_stops_on_cancellation_and_closes_file(monkeypatch, tmp_path):

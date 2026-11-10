@@ -72,7 +72,7 @@ from agent_backends import (
     BACKEND_OPENCODE,
     normalize_backend,
 )
-from markdown_rows import strip_noise
+from markdown_rows import Row, parse_response, strip_noise
 from task_list import CLAUDE_TASK_TOOLS, TaskList
 
 # How long a title may be before it is cut. Long enough to tell two similar
@@ -141,6 +141,7 @@ class HistoryOpenData:
     turns: list[HistoryTurn]
     tasks: TaskList
     task_warning: str = ""
+    rows: Optional[list[Row]] = None
 
 
 class HistoryOpenCancelled(Exception):
@@ -1897,8 +1898,26 @@ def prepare_history_open(
     _check_cancelled(cancelled)
     turns = load_turns(entry, cancelled=cancelled)
     _check_cancelled(cancelled)
+    rows: Optional[list[Row]] = [] if entry.resumable else None
+    response_number = 0
+    for turn in turns:
+        _check_cancelled(cancelled)
+        response_number += 1
+        if rows is None:
+            continue
+        if turn.prompt.strip():
+            rows.append(
+                Row(
+                    kind="you",
+                    label=f"You: {' '.join(turn.prompt.split())}",
+                    payload=turn.prompt,
+                    response_number=response_number,
+                )
+            )
+        rows.extend(parse_response(turn.response, response_number))
+    _check_cancelled(cancelled)
     if not turns:
-        return HistoryOpenData(turns=turns, tasks=TaskList())
+        return HistoryOpenData(turns=turns, tasks=TaskList(), rows=rows)
     try:
         tasks = restore_tasks(entry, strict_errors=True, cancelled=cancelled)
         warning = ""
@@ -1908,7 +1927,7 @@ def prepare_history_open(
         tasks = TaskList()
         warning = "Task list could not be restored."
     _check_cancelled(cancelled)
-    return HistoryOpenData(turns=turns, tasks=tasks, task_warning=warning)
+    return HistoryOpenData(turns=turns, tasks=tasks, task_warning=warning, rows=rows)
 
 
 def describe_age(modified: float, now: Optional[float] = None) -> str:
