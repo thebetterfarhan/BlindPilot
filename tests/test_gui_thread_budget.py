@@ -115,6 +115,38 @@ def test_an_accelerator_is_bound_through_the_budget_wrapper(wx_app, monkeypatch)
     assert [(name, entry is action) for name, entry in measured] == [("Ctrl+Tab, next tab", True)]
 
 
+def test_menu_and_timer_callbacks_record_each_overrun_once(frame, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(app.time, "perf_counter", lambda: now[0])
+    wrapped = []
+    original_gui_work = app._gui_work
+
+    def capture(name, action):
+        measured = original_gui_work(name, action)
+        wrapped.append(measured)
+        return measured
+
+    monkeypatch.setattr(app, "_gui_work", capture)
+
+    def slow_menu():
+        now[0] += 0.06
+
+    def slow_timer(_event):
+        now[0] += 0.06
+
+    app.MainFrame._menu_item(frame, wx.Menu(), "&Slow menu", "help", slow_menu)
+    timer = wx.Timer(frame)
+    app._bind_gui(timer, wx.EVT_TIMER, slow_timer, label="Timer: slow tick")
+
+    wrapped[0]()
+    wrapped[1](object())
+
+    assert [name for name, _spent in app.over_budget_work()] == [
+        "Slow menu",
+        "Timer: slow tick",
+    ]
+
+
 # ----- the guard itself -----
 
 

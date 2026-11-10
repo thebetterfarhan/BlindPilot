@@ -447,6 +447,58 @@ GUI_BUDGET_MS = 50.0
 # and the record must not grow without limit on a machine that is having a bad
 # day. Read by the tests that guard a handler, written only by `_gui_work`.
 _over_budget_work: deque[tuple[str, float]] = deque(maxlen=200)
+_gui_timing_frames: list["_GuiTimingFrame"] = []
+
+
+class _GuiTimingFrame:
+    def __init__(self):
+        self.started = time.perf_counter()
+        self.elapsed = 0.0
+        self.pause_depth = 0
+
+    def pause(self):
+        if self.pause_depth == 0:
+            self.elapsed += time.perf_counter() - self.started
+        self.pause_depth += 1
+
+    def resume(self):
+        self.pause_depth -= 1
+        if self.pause_depth == 0:
+            self.started = time.perf_counter()
+
+    def finish(self):
+        if self.pause_depth == 0:
+            self.elapsed += time.perf_counter() - self.started
+        return self.elapsed
+
+
+class _GuiModalHook(wx.ModalDialogHook):
+    def __init__(self):
+        super().__init__()
+        self.snapshots = []
+
+    def Enter(self, dialog):
+        frames = list(_gui_timing_frames)
+        self.snapshots.append(frames)
+        for frame in frames:
+            frame.pause()
+        return wx.ID_NONE
+
+    def Exit(self, dialog):
+        for frame in self.snapshots.pop():
+            frame.resume()
+
+
+class _gui_modal_tracking:
+    """Keep the wx hook alive and registered for an application run."""
+
+    def __enter__(self):
+        self.hook = _GuiModalHook()
+        self.hook.Register()
+        return self.hook
+
+    def __exit__(self, exc_type, exc, tb):
+        self.hook.Unregister()
 
 
 def over_budget_work() -> list[tuple[str, float]]:
@@ -467,16 +519,40 @@ def _gui_work(name: str, action: Callable[..., object]) -> Callable[..., None]:
     logger = logging.getLogger("blindpilot.timing")
 
     def run(*args: object, **kwargs: object) -> None:
-        started = time.perf_counter()
+        frame = _GuiTimingFrame()
+        _gui_timing_frames.append(frame)
         try:
             action(*args, **kwargs)
         finally:
-            spent = (time.perf_counter() - started) * 1000.0
+            _gui_timing_frames.remove(frame)
+            spent = frame.finish() * 1000.0
             if spent > GUI_BUDGET_MS:
                 _over_budget_work.append((name, spent))
                 logger.debug("%s spent %.0f ms on the GUI thread", name, spent)
 
     return run
+
+
+def _bind_gui(receiver, event, action, *bind_args, label=None, **bind_kwargs):
+    """Bind a measured callback and return the handler for later unbinding."""
+    if label is None:
+        event_name = next(
+            (
+                name
+                for name, candidate in vars(wx).items()
+                if name.startswith("EVT_") and candidate is event
+            ),
+            f"event {getattr(event, 'typeId', 'unknown')}",
+        )
+        action_name = getattr(action, "__qualname__", None)
+        if action_name is None:
+            action_name = type(action).__qualname__
+        name = f"{event_name}: {action_name}"
+    else:
+        name = label
+    handler = _gui_work(name, action)
+    receiver.Bind(event, handler, *bind_args, **bind_kwargs)
+    return handler
 
 
 _ORIGINAL_CALL_AFTER = wx.CallAfter
@@ -1490,7 +1566,7 @@ def _notify_if_away(panel: "SessionPanel", message: str) -> None:
         def on_notification(_event: wx.Event, selected: bool = chosen) -> None:
             done(selected)
 
-        note.Bind(wx.PyEventBinder(event_type), on_notification)
+        _bind_gui(note, wx.PyEventBinder(event_type), on_notification)
     note.Show()
 
 
@@ -3175,10 +3251,22 @@ class SettingsFilesDialog(wx.Dialog):
         outer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, pad)
         self.SetSizerAndFit(outer)
 
-        self.Bind(wx.EVT_BUTTON, lambda _event: self._open_selected(), open_button)
-        self.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._open_selected(), self.list_box)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_SIZE, self._on_size)
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _event: self._open_selected(),
+            open_button,
+            label="Open settings file button",
+        )
+        _bind_gui(
+            self,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _event: self._open_selected(),
+            self.list_box,
+            label="EVT_LISTBOX_DCLICK: SettingsFilesDialog -> _open_selected",
+        )
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_SIZE, self._on_size)
         self.list_box.SetFocus()
         self.CentreOnParent()
 
@@ -3251,13 +3339,18 @@ class FormattedView(wx.Dialog):
         kwargs = {"backend": backend} if backend else {}
         self.view = html2.WebView.New(self, wx.ID_ANY, **kwargs)
         self.view.SetMinSize(self.FromDIP(wx.Size(720, 520)))
-        self.view.Bind(html2.EVT_WEBVIEW_NAVIGATING, self._on_navigating)
-        self.view.Bind(html2.EVT_WEBVIEW_LOADED, lambda _e: self.view.SetFocus())
+        _bind_gui(self.view, html2.EVT_WEBVIEW_NAVIGATING, self._on_navigating)
+        _bind_gui(
+            self.view,
+            html2.EVT_WEBVIEW_LOADED,
+            lambda _e: self.view.SetFocus(),
+            label="EVT_WEBVIEW_LOADED: FormattedView.view -> view.SetFocus",
+        )
         self._loaded = False
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(self.view, 1, wx.EXPAND)
         self.SetSizerAndFit(sizer)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self.view.SetPage(page, "")
 
     def _on_navigating(self, event) -> None:
@@ -3364,7 +3457,7 @@ class BugReportDialog(wx.Dialog):
             def on_button(_event: wx.CommandEvent, selected: Callable[[], object] = action) -> None:
                 selected()
 
-            button.Bind(wx.EVT_BUTTON, on_button)
+            _bind_gui(button, wx.EVT_BUTTON, on_button)
             buttons.Add(button, 0, wx.RIGHT, self.FromDIP(PAD))
         buttons.Add(wx.Button(self, wx.ID_CANCEL, "Close"))
         sizer.Add(buttons, 0, wx.ALL, pad)
@@ -3475,13 +3568,28 @@ class ReadView(wx.Dialog):
             if on_save:
                 # Read only until Edit; on_save writes the text back.
                 self.edit_button = wx.Button(self, label="&Edit")
-                self.edit_button.Bind(wx.EVT_BUTTON, lambda _event: self._toggle_edit())
+                _bind_gui(
+                    self.edit_button,
+                    wx.EVT_BUTTON,
+                    lambda _event: self._toggle_edit(),
+                    label="EVT_BUTTON: ReadView.edit_button -> _toggle_edit",
+                )
                 buttons.Add(self.edit_button, 0, wx.RIGHT, self.FromDIP(8))
             outside = wx.Button(self, label="Edit in &Your Editor")
-            outside.Bind(wx.EVT_BUTTON, lambda _event: self._edit(edit_path))
+            _bind_gui(
+                outside,
+                wx.EVT_BUTTON,
+                lambda _event: self._edit(edit_path),
+                label="EVT_BUTTON: ReadView.outside -> _edit",
+            )
             buttons.Add(outside)
             close = wx.Button(self, wx.ID_CANCEL, "Close")
-            close.Bind(wx.EVT_BUTTON, lambda _event: self._close())
+            _bind_gui(
+                close,
+                wx.EVT_BUTTON,
+                lambda _event: self._close(),
+                label="EVT_BUTTON: ReadView.close -> _close",
+            )
             buttons.Add(close, 0, wx.LEFT, self.FromDIP(8))
             sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, self.FromDIP(PAD_DIALOG))
         self.SetSizerAndFit(sizer)
@@ -3490,8 +3598,10 @@ class ReadView(wx.Dialog):
         self._on_save = on_save
         self._saved = text
         self._editing = False
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_CLOSE, lambda _event: self._close())
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(
+            self, wx.EVT_CLOSE, lambda _event: self._close(), label="EVT_CLOSE: ReadView -> _close"
+        )
         viewer.SetFocus()
         self.CentreOnParent()
         if on_save and start_editing:
@@ -3565,14 +3675,29 @@ class MuseAiDialog(wx.Dialog):
         self.list = wx.ListBox(self)
         self.list.SetName(f"muse.ai {view}")
         self.list.SetMinSize(self.FromDIP(wx.Size(620, 340)))
-        self.list.Bind(wx.EVT_LISTBOX, lambda _e: self._selection_changed())
-        self.list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._read())
+        _bind_gui(
+            self.list,
+            wx.EVT_LISTBOX,
+            lambda _e: self._selection_changed(),
+            label="EVT_LISTBOX: MuseAiDialog.list -> _selection_changed",
+        )
+        _bind_gui(
+            self.list,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._read(),
+            label="EVT_LISTBOX_DCLICK: MuseAiDialog.list -> _read",
+        )
         sizer.Add(self.list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
         self.status = wx.StaticText(self, label="")
         sizer.Add(self.status, 0, wx.ALL, pad)
         buttons = wx.WrapSizer(wx.HORIZONTAL)
         self.read = wx.Button(self, label="&Read")
-        self.read.Bind(wx.EVT_BUTTON, lambda _e: self._read())
+        _bind_gui(
+            self.read,
+            wx.EVT_BUTTON,
+            lambda _e: self._read(),
+            label="EVT_BUTTON: MuseAiDialog.read -> _read",
+        )
         self.read.SetDefault()
         buttons.Add(self.read, 0, wx.RIGHT, pad)
         self.discuss = self.run = self.links = self.history = self.manage = self.suggestions = (
@@ -3580,43 +3705,88 @@ class MuseAiDialog(wx.Dialog):
         ) = None
         if view != "approvals":
             self.discuss = wx.Button(self, label="&Discuss in chat")
-            self.discuss.Bind(wx.EVT_BUTTON, lambda _e: self._discuss())
+            _bind_gui(
+                self.discuss,
+                wx.EVT_BUTTON,
+                lambda _e: self._discuss(),
+                label="EVT_BUTTON: MuseAiDialog.discuss -> _discuss",
+            )
             buttons.Add(self.discuss, 0, wx.RIGHT, pad)
         if view in ("feed", "ideas", "schedules", "suggestions"):
             label = "&Accept and run" if view == "suggestions" else "&Run now…"
             self.run = wx.Button(self, label=label)
-            self.run.Bind(wx.EVT_BUTTON, lambda _e: self._run())
+            _bind_gui(
+                self.run,
+                wx.EVT_BUTTON,
+                lambda _e: self._run(),
+                label="EVT_BUTTON: MuseAiDialog.run -> _run",
+            )
             buttons.Add(self.run, 0, wx.RIGHT, pad)
         if view == "feed":
             self.links = wx.Button(self, label="Open &link…")
-            self.links.Bind(wx.EVT_BUTTON, lambda _e: self._open_link())
+            _bind_gui(
+                self.links,
+                wx.EVT_BUTTON,
+                lambda _e: self._open_link(),
+                label="EVT_BUTTON: MuseAiDialog.links -> _open_link",
+            )
             buttons.Add(self.links, 0, wx.RIGHT, pad)
         if view == "schedules":
             self.history = wx.Button(self, label="Run &history")
-            self.history.Bind(wx.EVT_BUTTON, lambda _e: self._history())
+            _bind_gui(
+                self.history,
+                wx.EVT_BUTTON,
+                lambda _e: self._history(),
+                label="EVT_BUTTON: MuseAiDialog.history -> _history",
+            )
             buttons.Add(self.history, 0, wx.RIGHT, pad)
         if view == "goals":
             self.manage = wx.Button(self, label="&Manage goal…")
-            self.manage.Bind(wx.EVT_BUTTON, lambda _e: self._manage_goal())
+            _bind_gui(
+                self.manage,
+                wx.EVT_BUTTON,
+                lambda _e: self._manage_goal(),
+                label="EVT_BUTTON: MuseAiDialog.manage -> _manage_goal",
+            )
             self.suggestions = wx.Button(self, label="&Suggestions…")
-            self.suggestions.Bind(wx.EVT_BUTTON, lambda _e: self._suggestions())
+            _bind_gui(
+                self.suggestions,
+                wx.EVT_BUTTON,
+                lambda _e: self._suggestions(),
+                label="EVT_BUTTON: MuseAiDialog.suggestions -> _suggestions",
+            )
             buttons.Add(self.manage, 0, wx.RIGHT, pad)
             buttons.Add(self.suggestions, 0, wx.RIGHT, pad)
         if view == "suggestions":
             self.dismiss = wx.Button(self, label="D&ismiss suggestion")
-            self.dismiss.Bind(wx.EVT_BUTTON, lambda _e: self._dismiss())
+            _bind_gui(
+                self.dismiss,
+                wx.EVT_BUTTON,
+                lambda _e: self._dismiss(),
+                label="EVT_BUTTON: MuseAiDialog.dismiss -> _dismiss",
+            )
             buttons.Add(self.dismiss, 0, wx.RIGHT, pad)
         self.decide = wx.Button(self, label="&Decide approval…") if view == "approvals" else None
         if self.decide:
-            self.decide.Bind(wx.EVT_BUTTON, lambda _e: self._decide())
+            _bind_gui(
+                self.decide,
+                wx.EVT_BUTTON,
+                lambda _e: self._decide(),
+                label="EVT_BUTTON: MuseAiDialog.decide -> _decide",
+            )
             buttons.Add(self.decide, 0, wx.RIGHT, pad)
         self.refresh_button = wx.Button(self, label="Re&fresh")
-        self.refresh_button.Bind(wx.EVT_BUTTON, lambda _e: self._refresh())
+        _bind_gui(
+            self.refresh_button,
+            wx.EVT_BUTTON,
+            lambda _e: self._refresh(),
+            label="EVT_BUTTON: MuseAiDialog.refresh_button -> _refresh",
+        )
         buttons.Add(self.refresh_button, 0, wx.RIGHT, pad)
         buttons.Add(wx.Button(self, wx.ID_CANCEL, "Close"))
         sizer.Add(buttons, 0, wx.ALL, pad)
         self.SetSizerAndFit(sizer)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self._refresh()
         self.list.SetFocus()
         self.CentreOnParent()
@@ -4108,8 +4278,13 @@ class AgentFileList(wx.Dialog):
         self.list.SetMinSize(self.FromDIP(wx.Size(560, 320)))
         if labels:
             self.list.SetSelection(min(selected, len(labels) - 1))
-        self.list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._end(wx.ID_OPEN))
-        self.list.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
+        _bind_gui(
+            self.list,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._end(wx.ID_OPEN),
+            label="EVT_LISTBOX_DCLICK: AgentFileList.list -> _end",
+        )
+        _bind_gui(self.list, wx.EVT_KEY_DOWN, self._on_list_key)
 
         buttons = wx.BoxSizer(wx.HORIZONTAL)
         actions = [(wx.ID_OPEN, "&Read"), (wx.ID_EDIT, "&Edit")]
@@ -4121,7 +4296,7 @@ class AgentFileList(wx.Dialog):
             def on_button(_event: wx.CommandEvent, selected: int = id_) -> None:
                 self._end(selected)
 
-            button.Bind(wx.EVT_BUTTON, on_button)
+            _bind_gui(button, wx.EVT_BUTTON, on_button)
             buttons.Add(button, 0, wx.RIGHT, self.FromDIP(8))
             if id_ == wx.ID_OPEN:
                 button.SetDefault()
@@ -4358,7 +4533,7 @@ class ModelDialog(wx.Dialog):
             sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self.model_box.SetFocus()
         self.CentreOnParent()
 
@@ -4427,7 +4602,12 @@ class SubagentDialog(wx.Dialog):
         )
         self.log.SetName("Subagent activity")
         close = wx.Button(self, wx.ID_CLOSE, "Close")
-        close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
+        _bind_gui(
+            close,
+            wx.EVT_BUTTON,
+            lambda _e: self.EndModal(wx.ID_CLOSE),
+            label="EVT_BUTTON: SubagentDialog.close -> EndModal",
+        )
         self.SetEscapeId(wx.ID_CLOSE)
         pad = self.FromDIP(PAD)
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -4531,7 +4711,7 @@ class PermissionDialog(wx.Dialog):
             def on_button(_event: wx.CommandEvent, selected: int = button_id) -> None:
                 self.EndModal(selected)
 
-            button.Bind(wx.EVT_BUTTON, on_button)
+            _bind_gui(button, wx.EVT_BUTTON, on_button)
             buttons.Add(button, 0, wx.RIGHT, self.FromDIP(PAD))
             if button_id == self.DENY:
                 button.SetDefault()
@@ -4576,9 +4756,24 @@ class ConnectDialog(wx.Dialog):
         self.connect_btn = wx.Button(self, label="&Connect…")
         self.disconnect_btn = wx.Button(self, label="&Disconnect")
         close_btn = wx.Button(self, wx.ID_CANCEL, "Close")
-        self.connect_btn.Bind(wx.EVT_BUTTON, lambda _e: self._connect())
-        self.disconnect_btn.Bind(wx.EVT_BUTTON, lambda _e: self._disconnect())
-        self.list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._connect())
+        _bind_gui(
+            self.connect_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._connect(),
+            label="EVT_BUTTON: ConnectDialog.connect_btn -> _connect",
+        )
+        _bind_gui(
+            self.disconnect_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._disconnect(),
+            label="EVT_BUTTON: ConnectDialog.disconnect_btn -> _disconnect",
+        )
+        _bind_gui(
+            self.list,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._connect(),
+            label="EVT_LISTBOX_DCLICK: ConnectDialog.list -> _connect",
+        )
 
         pad = self.FromDIP(PAD_DIALOG)
         buttons = wx.BoxSizer(wx.HORIZONTAL)
@@ -4593,7 +4788,7 @@ class ConnectDialog(wx.Dialog):
         sizer.Add(buttons, 0, wx.ALIGN_RIGHT | wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self.list.SetFocus()
         self._refresh()
         self.CentreOnParent()
@@ -4917,7 +5112,7 @@ class SendToTabDialog(wx.Dialog):
         self.manual = wx.CheckBox(self, label="&Ask me before each hand-off")
         self.manual.Enable(False)
         rows.Add(self.manual, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
-        self.relay.Bind(wx.EVT_CHECKBOX, self._on_relay_toggle)
+        _bind_gui(self.relay, wx.EVT_CHECKBOX, self._on_relay_toggle)
 
         def field(label: str, name: str) -> wx.TextCtrl:
             rows.Add(wx.StaticText(self, label=label), 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
@@ -4932,7 +5127,7 @@ class SendToTabDialog(wx.Dialog):
             self, choices=[kind[0] for kind in RELAY_KINDS], name="Kind of conversation"
         )
         self.kind.SetSelection(0)
-        self.kind.Bind(wx.EVT_CHOICE, self._on_kind)
+        _bind_gui(self.kind, wx.EVT_CHOICE, self._on_kind)
         rows.Add(self.kind, 0, wx.LEFT | wx.RIGHT | wx.TOP, pad)
         self.first_role = field("&Role of this session:", "Role of this session")
         self.second_role = field("Role of the recei&ving session:", "Role of the receiving session")
@@ -4948,7 +5143,7 @@ class SendToTabDialog(wx.Dialog):
                 ok.SetLabel("&Send")
             rows.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizerAndFit(rows)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self.target.SetFocus()
         self.CentreOnParent()
 
@@ -5079,24 +5274,42 @@ class NewSessionDialog(wx.Dialog):
             # for a path that has to be valid on another one. An empty control
             # in the tab order is a cost a screen reader pays on every visit.
             browse_btn = wx.Button(self, label="&Browse…")
-            browse_btn.Bind(wx.EVT_BUTTON, lambda _e: self._browse())
+            _bind_gui(
+                browse_btn,
+                wx.EVT_BUTTON,
+                lambda _e: self._browse(),
+                label="EVT_BUTTON: NewSessionDialog.browse_btn -> _browse",
+            )
             folder_row.Add(browse_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(PAD))
             github_btn = wx.Button(self, label="From Git&Hub…")
-            github_btn.Bind(wx.EVT_BUTTON, lambda _e: self._from_github())
+            _bind_gui(
+                github_btn,
+                wx.EVT_BUTTON,
+                lambda _e: self._from_github(),
+                label="EVT_BUTTON: NewSessionDialog.github_btn -> _from_github",
+            )
             self.github_btn = github_btn
             folder_row.Add(github_btn, 0, wx.ALIGN_CENTER_VERTICAL)
             self.github_status = wx.StaticText(self, label="")
             self.github_status.Hide()
             self.github_cancel = wx.Button(self, label="&Cancel GitHub operation")
-            self.github_cancel.Bind(wx.EVT_BUTTON, lambda _e: self._cancel_github())
+            _bind_gui(
+                self.github_cancel,
+                wx.EVT_BUTTON,
+                lambda _e: self._cancel_github(),
+                label="EVT_BUTTON: NewSessionDialog.github_cancel -> _cancel_github",
+            )
             self.github_cancel.Hide()
             worktree_box = wx.CheckBox(self, label="Work in a new git &worktree")
             branch_label = wx.StaticText(self, label="B&ranch for the worktree:")
             branch_box = wx.TextCtrl(self, value="")
             branch_box.SetName("Branch for the worktree")
             branch_box.Disable()
-            worktree_box.Bind(
-                wx.EVT_CHECKBOX, lambda _e: branch_box.Enable(worktree_box.IsChecked())
+            _bind_gui(
+                worktree_box,
+                wx.EVT_CHECKBOX,
+                lambda _e: branch_box.Enable(worktree_box.IsChecked()),
+                label="EVT_CHECKBOX: NewSessionDialog.worktree_box -> branch_box.Enable",
             )
             self.worktree_box, self.branch_box = worktree_box, branch_box
 
@@ -5126,10 +5339,10 @@ class NewSessionDialog(wx.Dialog):
 
         # Validate before the dialog closes, so a bad path can be corrected
         # in place instead of failing after the session is created.
-        self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
-        self.Bind(wx.EVT_BUTTON, self._on_cancel_dialog, id=wx.ID_CANCEL)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_CLOSE, self._on_close)
+        _bind_gui(self, wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
+        _bind_gui(self, wx.EVT_BUTTON, self._on_cancel_dialog, id=wx.ID_CANCEL)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CLOSE, self._on_close)
         self.initial_focus().SetFocus()
         self.CentreOnParent()
 
@@ -5492,13 +5705,23 @@ class HistoryDialog(wx.Dialog):
         )
         self.backend_picker.SetName("Backend")
         self.backend_picker.SetSelection(self._backend_values.index(normalize_backend(backend)))
-        self.backend_picker.Bind(wx.EVT_CHOICE, lambda _e: self._reload())
+        _bind_gui(
+            self.backend_picker,
+            wx.EVT_CHOICE,
+            lambda _e: self._reload(),
+            label="EVT_CHOICE: HistoryDialog.backend_picker -> _reload",
+        )
 
         scope_label = wx.StaticText(self, label="&Show:")
         self.scope_picker = wx.Choice(self, choices=list(_HISTORY_SCOPE_LABELS))
         self.scope_picker.SetName("Show")
         self.scope_picker.SetSelection(0)
-        self.scope_picker.Bind(wx.EVT_CHOICE, lambda _e: self._reload())
+        _bind_gui(
+            self.scope_picker,
+            wx.EVT_CHOICE,
+            lambda _e: self._reload(),
+            label="EVT_CHOICE: HistoryDialog.scope_picker -> _reload",
+        )
 
         sort_label = wx.StaticText(self, label="So&rt:")
         self.sort_picker = wx.Choice(self, choices=list(_HISTORY_SORTS))
@@ -5507,25 +5730,55 @@ class HistoryDialog(wx.Dialog):
         self.sort_picker.SetSelection(
             _HISTORY_SORTS.index(saved_sort) if saved_sort in _HISTORY_SORTS else 0
         )
-        self.sort_picker.Bind(wx.EVT_CHOICE, lambda _e: self._on_sort())
+        _bind_gui(
+            self.sort_picker,
+            wx.EVT_CHOICE,
+            lambda _e: self._on_sort(),
+            label="EVT_CHOICE: HistoryDialog.sort_picker -> _on_sort",
+        )
         group_label = wx.StaticText(self, label="Gro&up:")
         self.group_picker = wx.Choice(self, choices=[_HISTORY_ANY_GROUP])
         self.group_picker.SetName("Group")
         self.group_picker.SetSelection(0)
-        self.group_picker.Bind(wx.EVT_CHOICE, lambda _e: self._refresh())
+        _bind_gui(
+            self.group_picker,
+            wx.EVT_CHOICE,
+            lambda _e: self._refresh(),
+            label="EVT_CHOICE: HistoryDialog.group_picker -> _refresh",
+        )
         self.show_hidden = wx.CheckBox(self, label="Show &hidden conversations")
-        self.show_hidden.Bind(wx.EVT_CHECKBOX, lambda _e: self._refresh())
+        _bind_gui(
+            self.show_hidden,
+            wx.EVT_CHECKBOX,
+            lambda _e: self._refresh(),
+            label="EVT_CHECKBOX: HistoryDialog.show_hidden -> _refresh",
+        )
 
         filter_label = wx.StaticText(self, label="&Filter:")
         self.filter_box = wx.TextCtrl(self)
         self.filter_box.SetName("Filter conversations")
         self.filter_box.SetHint("Type part of a conversation's first message")
-        self.filter_box.Bind(wx.EVT_TEXT, lambda _e: self._refresh())
+        _bind_gui(
+            self.filter_box,
+            wx.EVT_TEXT,
+            lambda _e: self._refresh(),
+            label="EVT_TEXT: HistoryDialog.filter_box -> _refresh",
+        )
 
         list_label = wx.StaticText(self, label="&Conversations:")
         self.list_box = make_conversation_list(self, name="Conversations")
-        self.list_box.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._accept())
-        self.list_box.Bind(wx.EVT_LISTBOX, lambda _e: self._schedule_preview())
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._accept(),
+            label="EVT_LISTBOX_DCLICK: HistoryDialog.list_box -> _accept",
+        )
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX,
+            lambda _e: self._schedule_preview(),
+            label="EVT_LISTBOX: HistoryDialog.list_box -> _schedule_preview",
+        )
 
         # How the selected conversation ended, to tell apart ones that began
         # alike. Read in the background, a moment after the selection settles.
@@ -5546,13 +5799,28 @@ class HistoryDialog(wx.Dialog):
             open_button.SetLabel("&Open")
         # Names and hiding are BlindPilot's own: no backend's files change.
         rename_button = wx.Button(self, label="Rena&me…")
-        rename_button.Bind(wx.EVT_BUTTON, lambda _e: self._rename())
+        _bind_gui(
+            rename_button,
+            wx.EVT_BUTTON,
+            lambda _e: self._rename(),
+            label="EVT_BUTTON: HistoryDialog.rename_button -> _rename",
+        )
         self.hide_button = wx.Button(self, label="Hi&de")
-        self.hide_button.Bind(wx.EVT_BUTTON, lambda _e: self._toggle_hidden())
+        _bind_gui(
+            self.hide_button,
+            wx.EVT_BUTTON,
+            lambda _e: self._toggle_hidden(),
+            label="EVT_BUTTON: HistoryDialog.hide_button -> _toggle_hidden",
+        )
         buttons.Insert(0, rename_button, 0, wx.RIGHT, self.FromDIP(PAD))
         buttons.Insert(1, self.hide_button, 0, wx.RIGHT, self.FromDIP(PAD))
         groups_button = wx.Button(self, label="&Groups…")
-        groups_button.Bind(wx.EVT_BUTTON, lambda _e: self._edit_groups())
+        _bind_gui(
+            groups_button,
+            wx.EVT_BUTTON,
+            lambda _e: self._edit_groups(),
+            label="EVT_BUTTON: HistoryDialog.groups_button -> _edit_groups",
+        )
         buttons.Insert(2, groups_button, 0, wx.RIGHT, self.FromDIP(PAD))
 
         pad = self.FromDIP(PAD_DIALOG)
@@ -5586,8 +5854,14 @@ class HistoryDialog(wx.Dialog):
             sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.Bind(wx.EVT_BUTTON, lambda _e: self._accept(), id=wx.ID_OK)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _e: self._accept(),
+            id=wx.ID_OK,
+            label="EVT_BUTTON: HistoryDialog -> _accept",
+        )
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self._reload()
         self.filter_box.SetFocus()
         self.CentreOnParent()
@@ -6017,19 +6291,39 @@ class HermesSessionsDialog(wx.Dialog):
         self.filter_box = wx.TextCtrl(self)
         self.filter_box.SetName("Filter conversations")
         self.filter_box.SetHint("Type part of a conversation's first message")
-        self.filter_box.Bind(wx.EVT_TEXT, lambda _e: self._refresh())
+        _bind_gui(
+            self.filter_box,
+            wx.EVT_TEXT,
+            lambda _e: self._refresh(),
+            label="EVT_TEXT: HermesSessionsDialog.filter_box -> _refresh",
+        )
 
         self.running_only = wx.CheckBox(self, label="Only the ones &running now")
         self.running_only.SetName("Only the ones running now")
-        self.running_only.Bind(wx.EVT_CHECKBOX, lambda _e: self._refresh())
+        _bind_gui(
+            self.running_only,
+            wx.EVT_CHECKBOX,
+            lambda _e: self._refresh(),
+            label="EVT_CHECKBOX: HermesSessionsDialog.running_only -> _refresh",
+        )
 
         list_label = wx.StaticText(self, label="&Conversations:")
         self.list_box = make_conversation_list(self, name="Conversations")
-        self.list_box.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._accept())
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._accept(),
+            label="EVT_LISTBOX_DCLICK: HermesSessionsDialog.list_box -> _accept",
+        )
         # The consequence of the selected row, spoken on arrow keys: attaching
         # and reopening are different acts and the difference must be heard
         # before Enter, not after.
-        self.list_box.Bind(wx.EVT_LISTBOX, lambda _e: self._announce_selection())
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX,
+            lambda _e: self._announce_selection(),
+            label="EVT_LISTBOX: HermesSessionsDialog.list_box -> _announce_selection",
+        )
 
         self.summary = wx.StaticText(self, label="")
         self.summary.SetName("Summary")
@@ -6053,8 +6347,14 @@ class HermesSessionsDialog(wx.Dialog):
             sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.Bind(wx.EVT_BUTTON, lambda _e: self._accept(), id=wx.ID_OK)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _e: self._accept(),
+            id=wx.ID_OK,
+            label="EVT_BUTTON: HermesSessionsDialog -> _accept",
+        )
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self._reload()
         self.filter_box.SetFocus()
         self.CentreOnParent()
@@ -6232,7 +6532,12 @@ class SlashCommandDialog(wx.Dialog):
         self.list_box.Set(labels)
         if labels:
             self.list_box.SetSelection(0)
-        self.list_box.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._accept())
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._accept(),
+            label="EVT_LISTBOX_DCLICK: SlashCommandDialog.list_box -> _accept",
+        )
 
         buttons = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
 
@@ -6245,8 +6550,14 @@ class SlashCommandDialog(wx.Dialog):
             sizer.Add(buttons, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.Bind(wx.EVT_BUTTON, lambda _e: self._accept(), id=wx.ID_OK)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _e: self._accept(),
+            id=wx.ID_OK,
+            label="EVT_BUTTON: SlashCommandDialog -> _accept",
+        )
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self.list_box.SetFocus()
         self.CentreOnParent()
 
@@ -6344,7 +6655,7 @@ class SavedPromptsDialog(wx.Dialog):
             def on_button(_event: wx.CommandEvent, selected: Callable[[], None] = action) -> None:
                 selected()
 
-            button.Bind(wx.EVT_BUTTON, on_button)
+            _bind_gui(button, wx.EVT_BUTTON, on_button)
             buttons.Add(button, 0, wx.RIGHT, self.FromDIP(4))
         close = wx.Button(self, wx.ID_CANCEL, "&Close")
         buttons.Add(close)
@@ -6360,10 +6671,26 @@ class SavedPromptsDialog(wx.Dialog):
         sizer.Add(buttons, 0, wx.ALL, pad)
         self.SetSizerAndFit(sizer)
 
-        self.list_box.Bind(wx.EVT_LISTBOX, lambda _e: self._show_text())
-        self.list_box.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._use())
-        self.Bind(wx.EVT_BUTTON, lambda _e: self._use(), id=wx.ID_OK)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX,
+            lambda _e: self._show_text(),
+            label="EVT_LISTBOX: SavedPromptsDialog.list_box -> _show_text",
+        )
+        _bind_gui(
+            self.list_box,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._use(),
+            label="EVT_LISTBOX_DCLICK: SavedPromptsDialog.list_box -> _use",
+        )
+        _bind_gui(
+            self,
+            wx.EVT_BUTTON,
+            lambda _e: self._use(),
+            id=wx.ID_OK,
+            label="EVT_BUTTON: SavedPromptsDialog -> _use",
+        )
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
         self._refresh(0)
         self.list_box.SetFocus()
         self.CentreOnParent()
@@ -6648,8 +6975,13 @@ class SessionPanel(wx.Panel):
         self.subagents_label = wx.StaticText(self, label="Subagents running:")
         self.subagents = wx.ListBox(self, style=wx.LB_SINGLE)
         self.subagents.SetName("Subagents running")
-        self.subagents.Bind(wx.EVT_LISTBOX_DCLICK, lambda _e: self._open_subagent())
-        self.subagents.Bind(wx.EVT_KEY_DOWN, self._on_subagents_key)
+        _bind_gui(
+            self.subagents,
+            wx.EVT_LISTBOX_DCLICK,
+            lambda _e: self._open_subagent(),
+            label="EVT_LISTBOX_DCLICK: SessionPanel.subagents -> _open_subagent",
+        )
+        _bind_gui(self.subagents, wx.EVT_KEY_DOWN, self._on_subagents_key)
         self.subagents.SetMinSize(wx.Size(-1, self.subagents.GetCharHeight() * 5))
         self.subagents_label.Hide()
         self.subagents.Hide()
@@ -6657,9 +6989,14 @@ class SessionPanel(wx.Panel):
         responses_label = wx.StaticText(self, label="Responses:")
         self.responses = make_conversation_list(self)
         self.responses.SetName("Responses")
-        self.responses.Bind(wx.EVT_LISTBOX_DCLICK, self._on_list_activate)
-        self.responses.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
-        self.responses.Bind(wx.EVT_CONTEXT_MENU, lambda _e: self._show_row_menu())
+        _bind_gui(self.responses, wx.EVT_LISTBOX_DCLICK, self._on_list_activate)
+        _bind_gui(self.responses, wx.EVT_KEY_DOWN, self._on_list_key)
+        _bind_gui(
+            self.responses,
+            wx.EVT_CONTEXT_MENU,
+            lambda _e: self._show_row_menu(),
+            label="EVT_CONTEXT_MENU: SessionPanel.responses -> _show_row_menu",
+        )
 
         # Same rows, one per line, in a read-only edit field — NVDA (and any
         # screen reader) can then browse them with its own review/say-all
@@ -6670,9 +7007,14 @@ class SessionPanel(wx.Panel):
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2,
         )
         self.responses_text.SetName("Responses")
-        self.responses_text.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
-        self.responses_text.Bind(wx.EVT_CONTEXT_MENU, lambda _e: self._show_row_menu())
-        self.responses_text.Bind(wx.EVT_SET_FOCUS, self._on_text_view_focus)
+        _bind_gui(self.responses_text, wx.EVT_KEY_DOWN, self._on_list_key)
+        _bind_gui(
+            self.responses_text,
+            wx.EVT_CONTEXT_MENU,
+            lambda _e: self._show_row_menu(),
+            label="EVT_CONTEXT_MENU: SessionPanel.responses_text -> _show_row_menu",
+        )
+        _bind_gui(self.responses_text, wx.EVT_SET_FOCUS, self._on_text_view_focus)
 
         prompt_label = self._prompt_label = wx.StaticText(self, label="Prompt:")
         self.prompt = wx.TextCtrl(
@@ -6684,9 +7026,9 @@ class SessionPanel(wx.Panel):
             "Type your prompt. Enter to send, Shift+Enter for newline, Ctrl+Up to enter "
             "responses; Tab returns here from responses."
         )
-        self.prompt.Bind(wx.EVT_KEY_DOWN, self._on_prompt_key)
-        self.prompt.Bind(wx.EVT_SET_FOCUS, self._on_prompt_focus)
-        self.prompt.Bind(wx.EVT_TEXT, self._on_prompt_text_changed)
+        _bind_gui(self.prompt, wx.EVT_KEY_DOWN, self._on_prompt_key)
+        _bind_gui(self.prompt, wx.EVT_SET_FOCUS, self._on_prompt_focus)
+        _bind_gui(self.prompt, wx.EVT_TEXT, self._on_prompt_text_changed)
         self._dictation_timer: wx.CallLater | None = None
         # What the prompt held at the last change, so the next one can be
         # told apart from a keystroke, and what is waiting to be read back.
@@ -6698,8 +7040,13 @@ class SessionPanel(wx.Panel):
         # Bottom row: Send, Attach, then the Permission mode picker — one line.
         self.send_btn = wx.Button(self, label="Send")
         self.send_btn.SetName("Send")
-        self.send_btn.Bind(wx.EVT_BUTTON, lambda _e: self._on_send())
-        self.send_btn.Bind(wx.EVT_KEY_DOWN, self._on_send_key)
+        _bind_gui(
+            self.send_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._on_send(),
+            label="EVT_BUTTON: SessionPanel.send_btn -> _on_send",
+        )
+        _bind_gui(self.send_btn, wx.EVT_KEY_DOWN, self._on_send_key)
 
         # Steer sits right after Send in the tab order, so during a run you can
         # type a correction, press Tab once, and press it. Enabled only while a
@@ -6707,7 +7054,12 @@ class SessionPanel(wx.Panel):
         self.steer_btn = wx.Button(self, label="Steer")
         self.steer_btn.SetName("Steer the running task")
         self.steer_btn.SetToolTip("Send this message into the task that is already running")
-        self.steer_btn.Bind(wx.EVT_BUTTON, lambda _e: self._on_steer())
+        _bind_gui(
+            self.steer_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._on_steer(),
+            label="EVT_BUTTON: SessionPanel.steer_btn -> _on_steer",
+        )
         self.steer_btn.Disable()
 
         # Stop follows Steer: the two things you can do to a run in progress sit
@@ -6715,7 +7067,12 @@ class SessionPanel(wx.Panel):
         self.stop_btn = wx.Button(self, label="Stop")
         self.stop_btn.SetName("Stop the running task")
         self.stop_btn.SetToolTip("Stop the task that is running now")
-        self.stop_btn.Bind(wx.EVT_BUTTON, lambda _e: self._on_stop())
+        _bind_gui(
+            self.stop_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._on_stop(),
+            label="EVT_BUTTON: SessionPanel.stop_btn -> _on_stop",
+        )
         self.stop_btn.Disable()
 
         # Sighted only. It is never focusable and has no name for the reader;
@@ -6725,18 +7082,28 @@ class SessionPanel(wx.Panel):
 
         self.attach_btn = wx.Button(self, label="Attach")
         self.attach_btn.SetName("Attach files")
-        self.attach_btn.Bind(wx.EVT_BUTTON, lambda _e: self.attach_files())
+        _bind_gui(
+            self.attach_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self.attach_files(),
+            label="EVT_BUTTON: SessionPanel.attach_btn -> attach_files",
+        )
 
         self.slash_btn = wx.Button(self, label="Slash…")
         self.slash_btn.SetName("Slash command picker")
-        self.slash_btn.Bind(wx.EVT_BUTTON, lambda _e: self._pick_slash_command())
+        _bind_gui(
+            self.slash_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._pick_slash_command(),
+            label="EVT_BUTTON: SessionPanel.slash_btn -> _pick_slash_command",
+        )
 
         mode_label = wx.StaticText(self, label="Permission mode:")
         self.mode_picker = wx.Choice(self, choices=_MODE_LABELS)
         self.mode_picker.SetName("Permission mode")
         self.mode_picker.SetSelection(_MODE_VALUES.index(self.mode))
-        self.mode_picker.Bind(wx.EVT_CHOICE, self._on_mode_choice)
-        self.mode_picker.Bind(wx.EVT_KEY_DOWN, self._on_mode_key)
+        _bind_gui(self.mode_picker, wx.EVT_CHOICE, self._on_mode_choice)
+        _bind_gui(self.mode_picker, wx.EVT_KEY_DOWN, self._on_mode_key)
 
         pad = self.FromDIP(PAD)
         # Buttons that act on the same thing sit a control gap apart; the
@@ -10688,8 +11055,8 @@ class SessionPanel(wx.Panel):
         def read_formatted(_event: wx.CommandEvent) -> None:
             self._read_formatted(row)
 
-        menu.Bind(
-            wx.EVT_MENU, _gui_work("Read response as formatted page", read_formatted), formatted
+        _bind_gui(
+            menu, wx.EVT_MENU, read_formatted, formatted, label="Read response as formatted page"
         )
         for kind, label in (
             ("code", "Code Blocks in This Response…"),
@@ -10700,31 +11067,33 @@ class SessionPanel(wx.Panel):
             def browse_items(_event: wx.CommandEvent, chosen: str = kind) -> None:
                 self.open_items(chosen, row.response_number)
 
-            menu.Bind(wx.EVT_MENU, _gui_work(label, browse_items), item)
+            _bind_gui(menu, wx.EVT_MENU, browse_items, item, label=label)
         if row.kind == "code":
             item = menu.Append(wx.ID_ANY, "Save code to file…")
 
             def save_code(_event: wx.CommandEvent) -> None:
                 self._action_save_code(row)
 
-            menu.Bind(wx.EVT_MENU, _gui_work("Save code to file", save_code), item)
+            _bind_gui(menu, wx.EVT_MENU, save_code, item, label="Save code to file")
         insert_item = menu.Append(wx.ID_ANY, "Insert into prompt")
 
         def insert(_event: wx.CommandEvent) -> None:
             self._action_insert(row)
 
-        menu.Bind(wx.EVT_MENU, _gui_work("Insert response into prompt", insert), insert_item)
+        _bind_gui(menu, wx.EVT_MENU, insert, insert_item, label="Insert response into prompt")
         copy_item = menu.Append(wx.ID_ANY, "Copy whole response")
 
         def copy_response(_event: wx.CommandEvent) -> None:
             self._action_copy_response(row)
 
-        menu.Bind(wx.EVT_MENU, _gui_work("Copy whole response", copy_response), copy_item)
+        _bind_gui(menu, wx.EVT_MENU, copy_response, copy_item, label="Copy whole response")
         copy_all_item = menu.Append(wx.ID_ANY, "Copy whole conversation")
-        menu.Bind(
+        _bind_gui(
+            menu,
             wx.EVT_MENU,
-            _gui_work("Copy whole conversation", lambda _e: self._action_copy_conversation()),
+            lambda _e: self._action_copy_conversation(),
             copy_all_item,
+            label="Copy whole conversation",
         )
         return menu
 
@@ -11298,8 +11667,18 @@ class SetupWizard(wx.Dialog):
         self._back_btn = wx.Button(self, label="Back")
         self._next_btn = wx.Button(self, label="Next")
         self._cancel_btn = wx.Button(self, wx.ID_CANCEL, "Cancel")
-        self._back_btn.Bind(wx.EVT_BUTTON, lambda _e: self._go(-1))
-        self._next_btn.Bind(wx.EVT_BUTTON, lambda _e: self._go(+1))
+        _bind_gui(
+            self._back_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._go(-1),
+            label="EVT_BUTTON: SetupWizard._back_btn -> _go",
+        )
+        _bind_gui(
+            self._next_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._go(+1),
+            label="EVT_BUTTON: SetupWizard._next_btn -> _go",
+        )
 
         pad = self.FromDIP(PAD_DIALOG)
         nav = wx.BoxSizer(wx.HORIZONTAL)
@@ -11315,9 +11694,9 @@ class SetupWizard(wx.Dialog):
         root.Add(nav, 0, wx.EXPAND | wx.ALL, pad)
         self.SetSizer(root)
 
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-        self.Bind(wx.EVT_CLOSE, self._on_wizard_close)
-        self.Bind(wx.EVT_SIZE, self._on_size)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_key)
+        _bind_gui(self, wx.EVT_CLOSE, self._on_wizard_close)
+        _bind_gui(self, wx.EVT_SIZE, self._on_size)
         self._show_step(0)
         self.CentreOnParent()
 
@@ -11355,7 +11734,7 @@ class SetupWizard(wx.Dialog):
         )
         self._setup_backend_picker.SetName("Backend")
         self._setup_backend_picker.SetSelection(BACKEND_IDS.index(self.backend))
-        self._setup_backend_picker.Bind(wx.EVT_CHOICE, self._on_backend_choice)
+        _bind_gui(self._setup_backend_picker, wx.EVT_CHOICE, self._on_backend_choice)
         pad = self.FromDIP(PAD)
         picker_row = wx.BoxSizer(wx.HORIZONTAL)
         picker_row.Add(backend_label_widget, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, pad)
@@ -11372,16 +11751,36 @@ class SetupWizard(wx.Dialog):
         self._cli_detail = self._paragraph(p)
 
         self._cli_install_btn = wx.Button(p, label="Install backend")
-        self._cli_install_btn.Bind(wx.EVT_BUTTON, lambda _e: self._install_cli())
+        _bind_gui(
+            self._cli_install_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._install_cli(),
+            label="EVT_BUTTON: SetupWizard._cli_install_btn -> _install_cli",
+        )
         self._cli_install_btn.Hide()
         self._cli_update_btn = wx.Button(p, label="Update backend")
-        self._cli_update_btn.Bind(wx.EVT_BUTTON, lambda _e: self._update_cli())
+        _bind_gui(
+            self._cli_update_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._update_cli(),
+            label="EVT_BUTTON: SetupWizard._cli_update_btn -> _update_cli",
+        )
         self._cli_update_btn.Hide()
         self._cli_path_btn = wx.Button(p, label="Add to PATH")
-        self._cli_path_btn.Bind(wx.EVT_BUTTON, lambda _e: self._repair_path())
+        _bind_gui(
+            self._cli_path_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._repair_path(),
+            label="EVT_BUTTON: SetupWizard._cli_path_btn -> _repair_path",
+        )
         self._cli_path_btn.Hide()
         self._cli_check_btn = wx.Button(p, label="Check Again")
-        self._cli_check_btn.Bind(wx.EVT_BUTTON, lambda _e: self._check_cli(force_update_check=True))
+        _bind_gui(
+            self._cli_check_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._check_cli(force_update_check=True),
+            label="EVT_BUTTON: SetupWizard._cli_check_btn -> _check_cli",
+        )
         self._cli_check_btn.Hide()
         self._cli_check_pending = False
 
@@ -11417,15 +11816,30 @@ class SetupWizard(wx.Dialog):
         self._signin_status = self._paragraph(p)
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
         self._signin_btn = wx.Button(p, label="Sign In")
-        self._signin_btn.Bind(wx.EVT_BUTTON, lambda _e: self._do_login())
+        _bind_gui(
+            self._signin_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._do_login(),
+            label="EVT_BUTTON: SetupWizard._signin_btn -> _do_login",
+        )
         self._already_btn = wx.Button(p, label="Already Signed In")
-        self._already_btn.Bind(wx.EVT_BUTTON, lambda _e: self._go(+1))
+        _bind_gui(
+            self._already_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._go(+1),
+            label="EVT_BUTTON: SetupWizard._already_btn -> _go",
+        )
         # The CLI opens the browser for some backends and refuses to for
         # others, and a browser closed by accident used to mean starting the
         # whole sign-in again. This reopens the address the CLI gave, whoever
         # was meant to open it the first time.
         self._open_page_btn = wx.Button(p, label="Open Sign-in Page")
-        self._open_page_btn.Bind(wx.EVT_BUTTON, lambda _e: self._open_sign_in_page())
+        _bind_gui(
+            self._open_page_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._open_sign_in_page(),
+            label="EVT_BUTTON: SetupWizard._open_page_btn -> _open_sign_in_page",
+        )
         self._open_page_btn.Disable()
         pad = self.FromDIP(PAD)
         btn_row.Add(self._signin_btn, 0, wx.RIGHT, pad)
@@ -11448,7 +11862,12 @@ class SetupWizard(wx.Dialog):
         )
         self._proj_label = wx.StaticText(p, label=self._proj_display())
         choose_btn = wx.Button(p, label="Choose Folder…")
-        choose_btn.Bind(wx.EVT_BUTTON, lambda _e: self._pick_folder())
+        _bind_gui(
+            choose_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._pick_folder(),
+            label="EVT_BUTTON: SetupWizard.choose_btn -> _pick_folder",
+        )
         pad = self.FromDIP(PAD)
         s = wx.BoxSizer(wx.VERTICAL)
         s.Add(intro, 0, wx.ALL, pad)
@@ -12680,7 +13099,12 @@ class RemoteHermesDialog(wx.Dialog):
             ],
         )
         self._credential.SetSelection(0 if REMOTE_HERMES.credential == "token" else 1)
-        self._credential.Bind(wx.EVT_CHOICE, lambda _e: self._sync_credential_fields())
+        _bind_gui(
+            self._credential,
+            wx.EVT_CHOICE,
+            lambda _e: self._sync_credential_fields(),
+            label="EVT_CHOICE: RemoteHermesDialog._credential -> _sync_credential_fields",
+        )
         self._credential.SetToolTip(
             "Sign in with a session token from the same computer, "
             "or a username and password from another computer"
@@ -12701,7 +13125,12 @@ class RemoteHermesDialog(wx.Dialog):
         self._status.Wrap(self.FromDIP(520))
 
         self._test_btn = wx.Button(self, label="&Test connection")
-        self._test_btn.Bind(wx.EVT_BUTTON, lambda _e: self._test())
+        _bind_gui(
+            self._test_btn,
+            wx.EVT_BUTTON,
+            lambda _e: self._test(),
+            label="EVT_BUTTON: RemoteHermesDialog._test_btn -> _test",
+        )
         self._test_btn.SetToolTip(
             "Try the address now, so a mistake is found here and not mid-turn"
         )
@@ -12913,7 +13342,12 @@ class PreferencesDialog(wx.Dialog):
             self._cue_checks[cue] = check
             cues_box.Add(check, 0, wx.LEFT | wx.TOP, pad)
         root.Add(cues_box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
-        self._sounds.Bind(wx.EVT_CHECKBOX, lambda _e: self._sync_sound_checks())
+        _bind_gui(
+            self._sounds,
+            wx.EVT_CHECKBOX,
+            lambda _e: self._sync_sound_checks(),
+            label="EVT_CHECKBOX: PreferencesDialog._sounds -> _sync_sound_checks",
+        )
         self._sync_sound_checks()
 
         root.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, pad)
@@ -12954,7 +13388,12 @@ class PreferencesDialog(wx.Dialog):
         )
         interval_row.Add(self._interval, 0)
         root.Add(interval_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, pad)
-        self._cue_box.Bind(wx.EVT_RADIOBOX, lambda _e: self._sync_interval())
+        _bind_gui(
+            self._cue_box,
+            wx.EVT_RADIOBOX,
+            lambda _e: self._sync_interval(),
+            label="EVT_RADIOBOX: PreferencesDialog._cue_box -> _sync_interval",
+        )
         self._sync_interval()
 
         root.Add(wx.StaticLine(panel), 0, wx.EXPAND | wx.ALL, pad)
@@ -13312,7 +13751,7 @@ class MainFrame(wx.Frame):
             def set_order(_event: wx.CommandEvent, selected: str = order) -> None:
                 self._set_chat_model_order(selected)
 
-            self.Bind(wx.EVT_MENU, _gui_work("Chat model order", set_order), item)
+            _bind_gui(self, wx.EVT_MENU, set_order, item, label="Chat model order")
         chat_menu.AppendSubMenu(
             model_order_menu,
             "Model &order",
@@ -13397,122 +13836,160 @@ class MainFrame(wx.Frame):
         self._refresh_connect_item()
         self._refresh_hermes_sessions_item()
         self._refresh_mode_items()
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show live rows", lambda _e: self._toggle_live_rows()),
+            lambda _e: self._toggle_live_rows(),
             self._rows_item,
+            label="Show live rows",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Speak live rows", lambda _e: self._toggle_speak_live()),
+            lambda _e: self._toggle_speak_live(),
             self._speak_item,
+            label="Speak live rows",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show thinking", lambda _e: self._toggle_show_thinking()),
+            lambda _e: self._toggle_show_thinking(),
             self._thinking_item,
+            label="Show thinking",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Toggle sounds", lambda _e: self._toggle_sounds()),
+            lambda _e: self._toggle_sounds(),
             self._sounds_item,
+            label="Toggle sounds",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Toggle text view", lambda _e: self._toggle_text_view()),
+            lambda _e: self._toggle_text_view(),
             self._text_view_item,
+            label="Toggle text view",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Progress cue: loop", lambda _e: self._choose_progress_cue(CUE_LOOP)),
+            lambda _e: self._choose_progress_cue(CUE_LOOP),
             self._cue_loop_item,
+            label="Progress cue: loop",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work(
-                "Progress cue: periodic",
-                lambda _e: self._choose_progress_cue(CUE_PERIODIC),
-            ),
+            lambda _e: self._choose_progress_cue(CUE_PERIODIC),
             self._cue_periodic_item,
+            label="Progress cue: periodic",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Progress cue: off", lambda _e: self._choose_progress_cue(CUE_OFF)),
+            lambda _e: self._choose_progress_cue(CUE_OFF),
             self._cue_off_item,
+            label="Progress cue: off",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Configure cue interval", lambda _e: self._configure_cue_interval()),
+            lambda _e: self._configure_cue_interval(),
             cue_interval_item,
+            label="Configure cue interval",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Configure remote Hermes", lambda _e: self._configure_remote_hermes()),
+            lambda _e: self._configure_remote_hermes(),
             remote_hermes_item,
+            label="Configure remote Hermes",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work(
-                "Use silent until response",
-                lambda _e: self._use_silent_until_response_mode(),
-            ),
+            lambda _e: self._use_silent_until_response_mode(),
             silent_response_item,
+            label="Use silent until response",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show Chat accounts", lambda _e: self._show_chat_accounts()),
+            lambda _e: self._show_chat_accounts(),
             self._chat_accounts_item,
+            label="Show Chat accounts",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show Chat profiles", lambda _e: self._show_chat_profiles()),
+            lambda _e: self._show_chat_profiles(),
             self._chat_profiles_item,
+            label="Show Chat profiles",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show Chat conversations", lambda _e: self._show_chat_conversations()),
+            lambda _e: self._show_chat_conversations(),
             self._chat_conversations_item,
+            label="Show Chat conversations",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Refresh Chat models", lambda _e: self._refresh_chat_models()),
+            lambda _e: self._refresh_chat_models(),
             self._chat_refresh_item,
+            label="Refresh Chat models",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Chat history list view", lambda _e: self._set_chat_history_view("list")),
+            lambda _e: self._set_chat_history_view("list"),
             self._chat_history_list_item,
+            label="Chat history list view",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Chat history text view", lambda _e: self._set_chat_history_view("text")),
+            lambda _e: self._set_chat_history_view("text"),
             self._chat_history_text_item,
+            label="Chat history text view",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show Chat diagnostics", lambda _e: self._show_chat_diagnostics()),
+            lambda _e: self._show_chat_diagnostics(),
             self._chat_diagnostics_item,
+            label="Show Chat diagnostics",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Show preferences", lambda _e: self._show_preferences()),
+            lambda _e: self._show_preferences(),
             preferences_item,
+            label="Show preferences",
         )
-        self.Bind(wx.EVT_MENU, _gui_work("Show about", lambda _e: self._show_about()), about_item)
-        self.Bind(
+        _bind_gui(self, wx.EVT_MENU, lambda _e: self._show_about(), about_item, label="Show about")
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Open log folder", lambda _e: self._open_log_folder()),
+            lambda _e: self._open_log_folder(),
             logs_item,
+            label="Open log folder",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Check for updates", lambda _e: self._show_update_dialog()),
+            lambda _e: self._show_update_dialog(),
             update_item,
+            label="Check for updates",
         )
-        self.Bind(
+        _bind_gui(
+            self,
             wx.EVT_MENU,
-            _gui_work("Toggle automatic updates", lambda _e: self._toggle_automatic_updates()),
+            lambda _e: self._toggle_automatic_updates(),
             self._automatic_updates_item,
+            label="Toggle automatic updates",
         )
 
         # ----- Top-level layout: mode picker + active experience -----
@@ -13531,8 +14008,8 @@ class MainFrame(wx.Frame):
         self.mode_combo.SetName("Mode")
         self.mode_combo.SetSelection(1 if self._app_mode == APP_MODE_CHAT else 0)
         self.mode_combo.SetToolTip("Choose coding-agent sessions or provider chat")
-        self.mode_combo.Bind(wx.EVT_COMBOBOX, self._on_app_mode_changed)
-        self.mode_combo.Bind(wx.EVT_KEY_DOWN, self._on_mode_combo_key)
+        _bind_gui(self.mode_combo, wx.EVT_COMBOBOX, self._on_app_mode_changed)
+        _bind_gui(self.mode_combo, wx.EVT_KEY_DOWN, self._on_mode_combo_key)
         picker_row.Add(mode_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, self.FromDIP(PAD))
         picker_row.Add(self.mode_combo, 0, wx.ALIGN_CENTER_VERTICAL)
 
@@ -13545,7 +14022,7 @@ class MainFrame(wx.Frame):
         # A first guess at the strip's height; _fit_tab_strip measures the
         # real one once a tab exists.
         self.tab_switcher.SetMinSize(wx.Size(-1, root.FromDIP(38)))
-        self.tab_switcher.Bind(wx.EVT_BOOKCTRL_PAGE_CHANGED, self._on_tab_switcher_changed)
+        _bind_gui(self.tab_switcher, wx.EVT_BOOKCTRL_PAGE_CHANGED, self._on_tab_switcher_changed)
         self._syncing_tab_switcher = False
         self._strip_keeps_focus = False
 
@@ -13555,7 +14032,7 @@ class MainFrame(wx.Frame):
         # of its pages, even when the strip itself rejects keyboard focus.
         self.notebook = wx.Simplebook(root)
         self.notebook.SetName("Session pages")
-        self.notebook.Bind(wx.EVT_BOOKCTRL_PAGE_CHANGED, self._on_tab_changed)
+        _bind_gui(self.notebook, wx.EVT_BOOKCTRL_PAGE_CHANGED, self._on_tab_changed)
 
         # A backend left idle for a quarter of an hour is let go, so an
         # abandoned tab is not holding an app-server and its MCP children all
@@ -13642,7 +14119,7 @@ class MainFrame(wx.Frame):
         # EVT_KEY_DOWN is too late for Tab on native Windows Choice controls:
         # wxWidgets has already performed dialog navigation. A frame-level
         # character hook sees it first and routes only the page boundaries.
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_agent_char_hook)
+        _bind_gui(self, wx.EVT_CHAR_HOOK, self._on_agent_char_hook)
 
         self._add_session(initial_cwd)
         self._fit_tab_strip()
@@ -13654,7 +14131,7 @@ class MainFrame(wx.Frame):
         if not _STARTUP_CHECK:
             wx.CallAfter(self.focus_for_mode)
 
-        self.Bind(wx.EVT_CLOSE, self._on_close)
+        _bind_gui(self, wx.EVT_CLOSE, self._on_close)
 
     def _fit_tab_strip(self) -> None:
         """Shrink the tab strip to its tab row, so no empty page shows under it.
@@ -14813,8 +15290,8 @@ class MainFrame(wx.Frame):
             def set_backend(_event: wx.CommandEvent, chosen: str = backend) -> None:
                 self._set_backend(chosen)
 
-            self.Bind(
-                wx.EVT_MENU, _gui_work(f"Backend: {BACKEND_LABELS[backend]}", set_backend), item
+            _bind_gui(
+                self, wx.EVT_MENU, set_backend, item, label=f"Backend: {BACKEND_LABELS[backend]}"
             )
         return menu
 
@@ -14833,7 +15310,7 @@ class MainFrame(wx.Frame):
             def set_mode(_event: wx.CommandEvent, mode: str = value) -> None:
                 self._set_mode_active(mode)
 
-            self.Bind(wx.EVT_MENU, _gui_work(f"Permission mode: {label}", set_mode), item)
+            _bind_gui(self, wx.EVT_MENU, set_mode, item, label=f"Permission mode: {label}")
         return menu
 
     def _refresh_mode_items(self) -> None:
@@ -15379,7 +15856,7 @@ class MainFrame(wx.Frame):
             def set_narration(_event: wx.CommandEvent, chosen: str = mode) -> None:
                 self._set_narration(chosen)
 
-            self.Bind(wx.EVT_MENU, _gui_work(f"Narration: {label}", set_narration), item)
+            _bind_gui(self, wx.EVT_MENU, set_narration, item, label=f"Narration: {label}")
         return menu
 
     def _set_narration(self, mode: str) -> None:
@@ -15406,7 +15883,7 @@ class MainFrame(wx.Frame):
             def toggle_cue(_event: wx.CommandEvent, key: str = cue) -> None:
                 self._toggle_sound_cue(key)
 
-            self.Bind(wx.EVT_MENU, _gui_work(f"Sound cue: {label}", toggle_cue), item)
+            _bind_gui(self, wx.EVT_MENU, toggle_cue, item, label=f"Sound cue: {label}")
         return menu
 
     def _toggle_sound_cue(self, cue: str) -> None:
@@ -15657,7 +16134,12 @@ class MainFrame(wx.Frame):
         message = wx.StaticText(progress, label=f"Loading {title}")
         message.SetName("Loading conversation")
         cancel_button = wx.Button(progress, label="Cancel opening")
-        cancel_button.Bind(wx.EVT_BUTTON, lambda _event: self._cancel_history_open(serial))
+        _bind_gui(
+            cancel_button,
+            wx.EVT_BUTTON,
+            lambda _event: self._cancel_history_open(serial),
+            label="EVT_BUTTON: MainFrame.cancel_button -> _cancel_history_open",
+        )
         self._history_open_message = message
         self._history_open_cancel_button = cancel_button
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -15669,13 +16151,15 @@ class MainFrame(wx.Frame):
             progress.FromDIP(PAD_DIALOG),
         )
         progress.SetSizerAndFit(sizer)
-        progress.Bind(
+        _bind_gui(
+            progress,
             wx.EVT_CHAR_HOOK,
             lambda event: (
                 self._cancel_history_open(serial)
                 if event.GetKeyCode() == wx.WXK_ESCAPE
                 else event.Skip()
             ),
+            label="EVT_CHAR_HOOK: MainFrame.progress -> Escape cancels history open",
         )
 
         def close(event) -> None:
@@ -15684,7 +16168,7 @@ class MainFrame(wx.Frame):
                 self._history_open_progress = None
             event.Skip()
 
-        progress.Bind(wx.EVT_CLOSE, close)
+        _bind_gui(progress, wx.EVT_CLOSE, close)
         self._history_open_progress = progress
         progress.CentreOnParent()
         progress.Show()
@@ -16430,10 +16914,12 @@ class MainFrame(wx.Frame):
         """Check every second for session links a second copy handed over."""
         if self._links_timer is None:
             self._links_timer = wx.Timer(self)
-            self.Bind(
+            _bind_gui(
+                self,
                 wx.EVT_TIMER,
-                _gui_work("Timer: refresh links", lambda _e: self._take_links()),
+                lambda _e: self._take_links(),
                 self._links_timer,
+                label="Timer: refresh links",
             )
             self._links_timer.Start(1000)
 
@@ -16461,12 +16947,12 @@ class MainFrame(wx.Frame):
             return
         if self._model_timer is None:
             self._model_timer = wx.Timer(self)
-            self.Bind(
+            _bind_gui(
+                self,
                 wx.EVT_TIMER,
-                _gui_work(
-                    "Timer: refresh model catalogs", lambda _e: self._refresh_model_catalogs()
-                ),
+                lambda _e: self._refresh_model_catalogs(),
                 self._model_timer,
+                label="Timer: refresh model catalogs",
             )
         self._model_timer.Start(minutes * 60 * 1000)
 
@@ -16736,114 +17222,117 @@ def main() -> int:
     install_path.keep_bundle_off_child_path()
     portable_node.activate_managed_cli_paths()
     app = wx.App(False)
-    # The application menu on macOS reads the display name; without this it
-    # says "Python" when BlindPilot is run from source.
-    app.SetAppName(APP_NAME)
-    app.SetAppDisplayName(APP_NAME)
-    # One copy per user. A second one shares the config, the history and
-    # Codex's app server with the first and fights it over all three; starting
-    # it again is almost always somebody looking for the window they lost.
-    # Startup checks run beside a working copy and are exempt.
-    instance = (
-        None if gui_startup_smoke else wx.SingleInstanceChecker(f"{APP_NAME}-{wx.GetUserId()}")
-    )
-    # A blindpilot:// session link, when Windows started this copy for one.
-    link = next(
-        (arg for arg in sys.argv[1:] if arg.startswith(f"{remote_sessions.LINK_SCHEME}:")), ""
-    )
-    if instance is not None and instance.IsAnotherRunning():
-        logging.getLogger("blindpilot").info("another BlindPilot is running; raising it")
-        if link:
-            hand_over_link(link)
-        if not _raise_running_copy():
-            wx.MessageBox("BlindPilot is already running.", APP_NAME, wx.OK | wx.ICON_INFORMATION)
-        return 0
-
-    cfg = _load_config()
-    # Chosen here, before the first window, because wxWidgets cannot change
-    # it later; that is why Preferences says the choice waits for a restart.
-    # Dark mode on Windows is experimental in wxWidgets 3.3, so a refusal is
-    # noted and the app carries on with whatever it gets.
-    appearance = _valid_appearance(cfg.get("appearance"))
-    set_appearance = getattr(app, "SetAppearance", None)
-    if set_appearance is None:
-        # wxPython before 4.3 has no appearance API. requirements.txt requires
-        # 4.3.2 or later, so this only covers a source checkout on an older one.
-        logging.getLogger("blindpilot").info(
-            "appearance %s was not applied, this wxPython cannot set it", appearance
+    with _gui_modal_tracking():
+        # The application menu on macOS reads the display name; without this it
+        # says "Python" when BlindPilot is run from source.
+        app.SetAppName(APP_NAME)
+        app.SetAppDisplayName(APP_NAME)
+        # One copy per user. A second one shares the config, the history and
+        # Codex's app server with the first and fights it over all three; starting
+        # it again is almost always somebody looking for the window they lost.
+        # Startup checks run beside a working copy and are exempt.
+        instance = (
+            None if gui_startup_smoke else wx.SingleInstanceChecker(f"{APP_NAME}-{wx.GetUserId()}")
         )
-    else:
-        result = set_appearance(_appearance_for(appearance))
-        if result != wx.App.AppearanceResult.Ok:
+        # A blindpilot:// session link, when Windows started this copy for one.
+        link = next(
+            (arg for arg in sys.argv[1:] if arg.startswith(f"{remote_sessions.LINK_SCHEME}:")), ""
+        )
+        if instance is not None and instance.IsAnotherRunning():
+            logging.getLogger("blindpilot").info("another BlindPilot is running; raising it")
+            if link:
+                hand_over_link(link)
+            if not _raise_running_copy():
+                wx.MessageBox(
+                    "BlindPilot is already running.", APP_NAME, wx.OK | wx.ICON_INFORMATION
+                )
+            return 0
+
+        cfg = _load_config()
+        # Chosen here, before the first window, because wxWidgets cannot change
+        # it later; that is why Preferences says the choice waits for a restart.
+        # Dark mode on Windows is experimental in wxWidgets 3.3, so a refusal is
+        # noted and the app carries on with whatever it gets.
+        appearance = _valid_appearance(cfg.get("appearance"))
+        set_appearance = getattr(app, "SetAppearance", None)
+        if set_appearance is None:
+            # wxPython before 4.3 has no appearance API. requirements.txt requires
+            # 4.3.2 or later, so this only covers a source checkout on an older one.
             logging.getLogger("blindpilot").info(
-                "appearance %s was not applied, wx returned %s", appearance, result
+                "appearance %s was not applied, this wxPython cannot set it", appearance
             )
-    # Installs that predate full-auto still carry the mode an older BlindPilot
-    # saved for them. Moving them over here is what makes "nothing stops to
-    # ask" true of an upgrade as well as of a fresh install.
-    if adopt_full_auto_default(cfg):
-        _save_config(cfg)
-    if chat_gui_startup_smoke:
-        cfg["app_mode"] = APP_MODE_CHAT
-    # A packaged GUI smoke test runs with a clean temporary profile in CI. It
-    # must exercise the real main window without waiting in the interactive
-    # first-run wizard.
-    if not cfg.get("setup_complete") and not gui_startup_smoke:
-        wizard = SetupWizard(
-            None,
-            cfg.get("projects_folder"),
-            normalize_backend(cfg.get("backend")),
-        )
-        result = wizard.ShowModal()
-        if result == wx.ID_OK:
-            if wizard.projects_folder:
-                cfg["projects_folder"] = wizard.projects_folder
-            cfg["backend"] = wizard.backend
-        # Finishing or deliberately dismissing the optional Claude setup both
-        # count as handled. Users choosing Codex or FreeBuff should not be sent
-        # back through the Claude wizard on every launch.
-        cfg["setup_complete"] = True
-        _record_setup_complete(cfg)
-        wizard.Destroy()
-        # Even if cancelled, open the app — user may know what they're doing.
+        else:
+            result = set_appearance(_appearance_for(appearance))
+            if result != wx.App.AppearanceResult.Ok:
+                logging.getLogger("blindpilot").info(
+                    "appearance %s was not applied, wx returned %s", appearance, result
+                )
+        # Installs that predate full-auto still carry the mode an older BlindPilot
+        # saved for them. Moving them over here is what makes "nothing stops to
+        # ask" true of an upgrade as well as of a fresh install.
+        if adopt_full_auto_default(cfg):
+            _save_config(cfg)
+        if chat_gui_startup_smoke:
+            cfg["app_mode"] = APP_MODE_CHAT
+        # A packaged GUI smoke test runs with a clean temporary profile in CI. It
+        # must exercise the real main window without waiting in the interactive
+        # first-run wizard.
+        if not cfg.get("setup_complete") and not gui_startup_smoke:
+            wizard = SetupWizard(
+                None,
+                cfg.get("projects_folder"),
+                normalize_backend(cfg.get("backend")),
+            )
+            result = wizard.ShowModal()
+            if result == wx.ID_OK:
+                if wizard.projects_folder:
+                    cfg["projects_folder"] = wizard.projects_folder
+                cfg["backend"] = wizard.backend
+            # Finishing or deliberately dismissing the optional Claude setup both
+            # count as handled. Users choosing Codex or FreeBuff should not be sent
+            # back through the Claude wizard on every launch.
+            cfg["setup_complete"] = True
+            _record_setup_complete(cfg)
+            wizard.Destroy()
+            # Even if cancelled, open the app — user may know what they're doing.
 
-    global _STARTUP_CHECK
-    _STARTUP_CHECK = gui_startup_smoke
-    frame = MainFrame(initial_cwd=os.getcwd())
-    if gui_startup_smoke:
-        # Never shown. What this checks is that the window can be *built* -
-        # every menu, control and binding made, and the sizers able to lay
-        # them out - and none of that needs it on screen. Showing it put a
-        # window in front of whoever was running the checks for a second and
-        # a half, and for somebody who navigates by ear that is not a
-        # harmless flicker.
-        frame.Layout()
-        wx.CallLater(1500, frame.Close)
-    else:
-        frame.Show()
-        frame.watch_for_links()
-        frame.watch_model_catalogs()
-        if link:
-            wx.CallAfter(frame.open_session_link, link)
-        frame.Raise()
-        _bring_to_front()
-        # An update that failed did so with no window to report to, so its
-        # reason is read out here, before anything else competes for attention.
-        wx.CallLater(1200, frame.report_failed_update)
-        if frame.automatic_update_check_enabled():
-            wx.CallLater(5000, frame.check_for_updates_silently)
-        # Abandoned downloads are tens of megabytes each.
-        wx.CallLater(8000, sweep_temporary_files)
-    app.MainLoop()
-    # The main window, destroyed as the loop ended, is only queued for
-    # deletion. Left queued, wxMSW tears the app down around it and prints
-    # "UnregisterClass failed ... Class still has open windows". One more idle
-    # pass frees it. Only this window: others belong to whoever called main().
-    if any(window is frame for window in wx.GetTopLevelWindows()):
-        frame.Destroy()
-        wx.CallAfter(app.ExitMainLoop)
+        global _STARTUP_CHECK
+        _STARTUP_CHECK = gui_startup_smoke
+        frame = MainFrame(initial_cwd=os.getcwd())
+        if gui_startup_smoke:
+            # Never shown. What this checks is that the window can be *built* -
+            # every menu, control and binding made, and the sizers able to lay
+            # them out - and none of that needs it on screen. Showing it put a
+            # window in front of whoever was running the checks for a second and
+            # a half, and for somebody who navigates by ear that is not a
+            # harmless flicker.
+            frame.Layout()
+            wx.CallLater(1500, frame.Close)
+        else:
+            frame.Show()
+            frame.watch_for_links()
+            frame.watch_model_catalogs()
+            if link:
+                wx.CallAfter(frame.open_session_link, link)
+            frame.Raise()
+            _bring_to_front()
+            # An update that failed did so with no window to report to, so its
+            # reason is read out here, before anything else competes for attention.
+            wx.CallLater(1200, frame.report_failed_update)
+            if frame.automatic_update_check_enabled():
+                wx.CallLater(5000, frame.check_for_updates_silently)
+            # Abandoned downloads are tens of megabytes each.
+            wx.CallLater(8000, sweep_temporary_files)
         app.MainLoop()
-    return 0
+        # The main window, destroyed as the loop ended, is only queued for
+        # deletion. Left queued, wxMSW tears the app down around it and prints
+        # "UnregisterClass failed ... Class still has open windows". One more idle
+        # pass frees it. Only this window: others belong to whoever called main().
+        if any(window is frame for window in wx.GetTopLevelWindows()):
+            frame.Destroy()
+            wx.CallAfter(app.ExitMainLoop)
+            app.MainLoop()
+        return 0
 
 
 if __name__ == "__main__":
