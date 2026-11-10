@@ -134,6 +134,24 @@ class HistoryTurn:
     sequence: Optional[int] = None
 
 
+@dataclass
+class HistoryOpenData:
+    """Conversation text and optional task state prepared away from the GUI."""
+
+    turns: list[HistoryTurn]
+    tasks: TaskList
+    task_warning: str = ""
+
+
+class HistoryOpenCancelled(Exception):
+    """A saved-conversation read was withdrawn at a safe checkpoint."""
+
+
+def _check_cancelled(cancelled: Optional[Callable[[], bool]]) -> None:
+    if cancelled is not None and cancelled():
+        raise HistoryOpenCancelled("conversation opening cancelled")
+
+
 # Every CLI stuffs context of its own into the user side of the transcript —
 # environment blocks, skills manifests, system reminders, plugin listings,
 # slash-command wrappers — all of it wrapped in an XML-ish element. Removing
@@ -261,7 +279,13 @@ def _content_text(content: object, kinds: Sequence[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
+def _iter_jsonl(
+    path: Path,
+    limit: Optional[int] = None,
+    *,
+    strict_errors: bool = False,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> Iterator[dict]:
     """Yield the JSON objects in a JSONL transcript, skipping unreadable lines.
 
     A transcript being written to right now can end in a half-flushed line, and
@@ -270,9 +294,15 @@ def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
     """
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
-            for count, line in enumerate(handle):
+            count = 0
+            while True:
+                _check_cancelled(cancelled)
                 if limit is not None and count >= limit:
                     return
+                line = handle.readline()
+                if not line:
+                    return
+                count += 1
                 line = line.strip()
                 if not line:
                     continue
@@ -283,6 +313,9 @@ def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
                 if isinstance(record, dict):
                     yield record
     except OSError:
+        _check_cancelled(cancelled)
+        if strict_errors:
+            raise
         return
 
 
@@ -451,10 +484,16 @@ def _jsonl_entries(fmt: _JsonlFormat, cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _jsonl_turns(fmt: _JsonlFormat, entry: HistoryEntry) -> List[HistoryTurn]:
+def _jsonl_turns(
+    fmt: _JsonlFormat,
+    entry: HistoryEntry,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> List[HistoryTurn]:
     """A whole transcript read back as prompt-and-answer turns."""
     turns: List[HistoryTurn] = []
-    for record in _iter_jsonl(Path(entry.path)):
+    for record in _iter_jsonl(Path(entry.path), cancelled=cancelled):
+        _check_cancelled(cancelled)
         role, text = fmt.message_of(record)
         if role == "user":
             turns.append(HistoryTurn(prompt=text))
@@ -880,12 +919,15 @@ def _hermes_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
+def _hermes_turns_for(
+    session_id: str, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     """Read one Hermes conversation back as prompt-and-response turns.
 
     Which store is consulted is decided by :func:`_hermes_query`, so this does
     not need to know whether Hermes runs here or in WSL.
     """
+    _check_cancelled(cancelled)
     rows = _hermes_query(
         """
         SELECT role, content, display_kind
@@ -896,9 +938,11 @@ def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
         """,
         (session_id, _HERMES_MAX_ROWS),
     )
+    _check_cancelled(cancelled)
 
     turns: List[HistoryTurn] = []
     for row in rows:
+        _check_cancelled(cancelled)
         role = str(row.get("role") or "")
         if role in _HERMES_SKIP_ROLES:
             continue
@@ -918,13 +962,17 @@ def _hermes_turns_for(session_id: str) -> List[HistoryTurn]:
     return turns
 
 
-def _hermes_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _hermes_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     """Reader signature the public API uses. See :func:`load_turns`.
 
     Hermes' entries all share one store, so the session id has to come from the
     entry rather than the path -- the same shape opencode needs.
     """
-    return _hermes_turns_for(entry.session_id)
+    if cancelled is None:
+        return _hermes_turns_for(entry.session_id)
+    return _hermes_turns_for(entry.session_id, cancelled=cancelled)
 
 
 # ----- Muse -----
@@ -1006,16 +1054,22 @@ def _muse_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _muse_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _muse_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     """One Muse conversation read back as prompt-and-response turns."""
     from muse_backend import muse_session_log_text, parse_muse_transcript
 
+    _check_cancelled(cancelled)
     if not entry.path:
         return []
-    return [
-        HistoryTurn(prompt=clean_user_text(prompt), response=response)
-        for prompt, response in parse_muse_transcript(muse_session_log_text(entry.path))
-    ]
+    text = muse_session_log_text(entry.path)
+    _check_cancelled(cancelled)
+    turns = []
+    for prompt, response in parse_muse_transcript(text):
+        _check_cancelled(cancelled)
+        turns.append(HistoryTurn(prompt=clean_user_text(prompt), response=response))
+    return turns
 
 
 # ----- Codex's own databases -----
@@ -1065,7 +1119,10 @@ def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _codex_db_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
+    _check_cancelled(cancelled)
     path = _home() / ".codex" / _CODEX_HISTORY_DB
     connection = _hermes_connect(path) if path.is_file() else None
     if connection is None:
@@ -1078,11 +1135,14 @@ def _codex_db_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             (entry.session_id,),
         ).fetchall()
     except Exception:  # noqa: BLE001
+        _check_cancelled(cancelled)
         return []
     finally:
         connection.close()
+    _check_cancelled(cancelled)
     turns: dict[str, HistoryTurn] = {}
     for row in rows:
+        _check_cancelled(cancelled)
         try:
             item = json.loads(row["item_json"])
         except ValueError:
@@ -1106,8 +1166,11 @@ def _codex_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries + [e for e in _jsonl_entries(_CODEX, cwd) if e.session_id not in known]
 
 
-def _codex_turns(entry: HistoryEntry) -> List[HistoryTurn]:
-    turns = _codex_db_turns(entry)
+def _codex_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
+    turns = _codex_db_turns(entry, cancelled=cancelled)
+    _check_cancelled(cancelled)
     if turns:
         return turns
     if (
@@ -1115,7 +1178,7 @@ def _codex_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         and Path(entry.path).is_file()
         and Path(entry.path).stat().st_size <= _MAX_TRANSCRIPT_BYTES
     ):
-        return _jsonl_turns(_CODEX, entry)
+        return _jsonl_turns(_CODEX, entry, cancelled=cancelled)
     return []
 
 
@@ -1159,14 +1222,19 @@ def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _museai_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _museai_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     from museai_backend import museai_chat_snapshot
 
+    _check_cancelled(cancelled)
     turns, sequence = museai_chat_snapshot(entry.session_id)
-    return [
-        HistoryTurn(prompt=prompt, response=response, sequence=sequence or None)
-        for prompt, response in turns
-    ]
+    _check_cancelled(cancelled)
+    result = []
+    for prompt, response in turns:
+        _check_cancelled(cancelled)
+        result.append(HistoryTurn(prompt=prompt, response=response, sequence=sequence or None))
+    return result
 
 
 # ----- FreeBuff -----
@@ -1202,14 +1270,22 @@ def _freebuff_chat_buckets(cwd: Optional[str]) -> List[Path]:
         return []
 
 
-def _freebuff_messages(chat: Path) -> List[dict]:
+def _freebuff_messages(chat: Path, *, cancelled: Optional[Callable[[], bool]] = None) -> List[dict]:
+    _check_cancelled(cancelled)
     try:
         payload = json.loads((chat / "chat-messages.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        _check_cancelled(cancelled)
         return []
+    _check_cancelled(cancelled)
     if not isinstance(payload, list):
         return []
-    return [item for item in payload if isinstance(item, dict)]
+    messages = []
+    for item in payload:
+        _check_cancelled(cancelled)
+        if isinstance(item, dict):
+            messages.append(item)
+    return messages
 
 
 def _freebuff_first_prompt(chat: Path) -> str:
@@ -1315,8 +1391,12 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_desktop_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
+    _check_cancelled(cancelled)
     connection = _hermes_connect(Path(entry.path))
+    _check_cancelled(cancelled)
     if connection is None:
         return []
     try:
@@ -1325,11 +1405,14 @@ def _freebuff_desktop_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             (entry.session_id, _MAX_TRANSCRIPT_PARTS),
         ).fetchall()
     except Exception:  # noqa: BLE001
+        _check_cancelled(cancelled)
         return []
     finally:
         connection.close()
+    _check_cancelled(cancelled)
     turns: List[HistoryTurn] = []
     for row in rows:
+        _check_cancelled(cancelled)
         try:
             parts = json.loads(row["parts_json"] or "[]")
         except ValueError:
@@ -1356,16 +1439,21 @@ def _freebuff_all_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return _freebuff_entries(cwd) + _freebuff_desktop_entries(cwd)
 
 
-def _freebuff_any_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_any_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     if entry.path.endswith(_FREEBUFF_DESKTOP_DB):
-        return _freebuff_desktop_turns(entry)
-    return _freebuff_turns(entry)
+        return _freebuff_desktop_turns(entry, cancelled=cancelled)
+    return _freebuff_turns(entry, cancelled=cancelled)
 
 
-def _freebuff_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _freebuff_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     chat = Path(entry.path)
     turns: List[HistoryTurn] = []
-    for message in _freebuff_messages(chat):
+    for message in _freebuff_messages(chat, cancelled=cancelled):
+        _check_cancelled(cancelled)
         variant = message.get("variant")
         if variant == "user":
             text = str(message.get("content") or "").strip()
@@ -1379,6 +1467,7 @@ def _freebuff_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             continue
         answer: List[str] = []
         for block in blocks:
+            _check_cancelled(cancelled)
             if not isinstance(block, dict) or block.get("type") != "text":
                 continue
             # Reasoning is FreeBuff thinking aloud, not its answer.
@@ -1544,8 +1633,12 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     return entries
 
 
-def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def _opencode_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
+    _check_cancelled(cancelled)
     connection = _opencode_connect()
+    _check_cancelled(cancelled)
     if connection is None:
         return []
     turns: List[HistoryTurn] = []
@@ -1555,12 +1648,14 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created",
             (entry.session_id,),
         ):
+            _check_cancelled(cancelled)
             try:
                 record = json.loads(data)
             except ValueError:
                 continue
             if isinstance(record, dict):
                 roles[str(message_id)] = str(record.get("role") or "")
+        _check_cancelled(cancelled)
         # File names per user message, in first-seen order. A file part can
         # arrive before or after its message's text, so the names are gathered
         # first and the turns folded second; a message of bare files still
@@ -1571,6 +1666,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             "SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created LIMIT ?",
             (entry.session_id, _MAX_TRANSCRIPT_PARTS),
         ):
+            _check_cancelled(cancelled)
             role = roles.get(str(message_id))
             if role not in ("user", "assistant"):
                 continue
@@ -1594,6 +1690,7 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
                 texts.append((str(message_id), role, text))
         mentioned: set[str] = set()
         for message_id, role, text in texts:
+            _check_cancelled(cancelled)
             if role == "user":
                 cleaned = clean_user_text(text)
                 cleaned = _with_attached(cleaned, names.get(message_id, []))
@@ -1605,9 +1702,11 @@ def _opencode_turns(entry: HistoryEntry) -> List[HistoryTurn]:
                 turns.append(HistoryTurn())
             turns[-1].response = _append(turns[-1].response, text)
         for message_id, files in names.items():
+            _check_cancelled(cancelled)
             if message_id not in mentioned and files:
                 turns.append(HistoryTurn(prompt=_with_attached("", files)))
     except sqlite3.Error:
+        _check_cancelled(cancelled)
         return turns
     finally:
         connection.close()
@@ -1631,7 +1730,7 @@ _LISTERS: dict[str, Callable[[Optional[str]], List[HistoryEntry]]] = {
 # Readers are given the whole entry rather than its path, because opencode and
 # Hermes each keep every conversation in one database: what identifies their
 # transcript is the session id, not a file of its own.
-_READERS: dict[str, Callable[[HistoryEntry], List[HistoryTurn]]] = {
+_READERS: dict[str, Callable[..., List[HistoryTurn]]] = {
     BACKEND_CLAUDE: partial(_jsonl_turns, _CLAUDE),
     BACKEND_CODEX: _codex_turns,
     BACKEND_FREEBUFF: _freebuff_any_turns,
@@ -1680,15 +1779,19 @@ def list_history(
     return entries[: max(0, limit)]
 
 
-def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
+def load_turns(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryTurn]:
     """Read one past conversation back as prompt-and-response turns.
 
     Turns with neither a prompt nor an answer are dropped, so an aborted run
     does not leave an empty response in the list.
     """
+    _check_cancelled(cancelled)
     backend = normalize_backend(entry.backend)
     reader = _READERS.get(backend)
     if reader is None:
+        _check_cancelled(cancelled)
         return []
     # opencode's and Hermes' path is the database every conversation shares, so
     # its size is no measure of this one -- and on a machine that has used
@@ -1701,6 +1804,7 @@ def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
         try:
             path = Path(entry.path)
             if path.is_file() and path.stat().st_size > _MAX_TRANSCRIPT_BYTES:
+                _check_cancelled(cancelled)
                 return []
         except OSError:
             # A path this process cannot look at is not a conversation too big
@@ -1710,31 +1814,53 @@ def load_turns(entry: HistoryEntry) -> List[HistoryTurn]:
             # below.
             pass
     try:
-        turns = reader(entry)
+        turns = reader(entry) if cancelled is None else reader(entry, cancelled=cancelled)
     except OSError:
+        _check_cancelled(cancelled)
         return []
-    return [turn for turn in turns if turn.prompt.strip() or turn.response.strip()]
+    _check_cancelled(cancelled)
+    result = []
+    for turn in turns:
+        _check_cancelled(cancelled)
+        if turn.prompt.strip() or turn.response.strip():
+            result.append(turn)
+    return result
 
 
-def restore_tasks(entry: HistoryEntry) -> TaskList:
+def restore_tasks(
+    entry: HistoryEntry,
+    *,
+    strict_errors: bool = False,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> TaskList:
     """The task list a past conversation left, replayed from its transcript.
 
     Claude Code's task tools (tool_use, then the tool_result that gives
     TaskCreate its id) and Copilot's update_todo checklists. Other backends,
     and a transcript too large to read, give an empty list.
     """
+    _check_cancelled(cancelled)
     tasks = TaskList()
     backend = normalize_backend(entry.backend)
     path = Path(entry.path)
+    if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT):
+        _check_cancelled(cancelled)
+        return tasks
     try:
-        if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT) or (
-            path.stat().st_size > _MAX_TRANSCRIPT_BYTES
-        ):
+        size = path.stat().st_size
+        _check_cancelled(cancelled)
+        if size > _MAX_TRANSCRIPT_BYTES:
+            if strict_errors:
+                raise OSError("task transcript exceeds the size limit")
             return tasks
     except OSError:
+        _check_cancelled(cancelled)
+        if strict_errors:
+            raise
         return tasks
     calls: dict[str, tuple[str, dict]] = {}
-    for record in _iter_jsonl(path):
+    for record in _iter_jsonl(path, strict_errors=strict_errors, cancelled=cancelled):
+        _check_cancelled(cancelled)
         if backend == BACKEND_COPILOT:
             data = record.get("data")
             if record.get("type") == "tool.execution_start" and isinstance(data, dict):
@@ -1745,6 +1871,7 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
         message = record.get("message")
         content = message.get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else ():
+            _check_cancelled(cancelled)
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use" and block.get("name") in CLAUDE_TASK_TOOLS:
@@ -1761,6 +1888,27 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
                         result = block["content"]
                     tasks.apply_claude(call[0], call[1], result)
     return tasks
+
+
+def prepare_history_open(
+    entry: HistoryEntry, *, cancelled: Optional[Callable[[], bool]] = None
+) -> HistoryOpenData:
+    """Read conversation turns and optional task state for a saved opening."""
+    _check_cancelled(cancelled)
+    turns = load_turns(entry, cancelled=cancelled)
+    _check_cancelled(cancelled)
+    if not turns:
+        return HistoryOpenData(turns=turns, tasks=TaskList())
+    try:
+        tasks = restore_tasks(entry, strict_errors=True, cancelled=cancelled)
+        warning = ""
+    except HistoryOpenCancelled:
+        raise
+    except Exception:  # noqa: BLE001 - task state is optional after valid text loads
+        tasks = TaskList()
+        warning = "Task list could not be restored."
+    _check_cancelled(cancelled)
+    return HistoryOpenData(turns=turns, tasks=tasks, task_warning=warning)
 
 
 def describe_age(modified: float, now: Optional[float] = None) -> str:
