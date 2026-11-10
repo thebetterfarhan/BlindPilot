@@ -53,11 +53,12 @@ import re
 import sqlite3
 import sys
 import time
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, Sequence
+from typing import Callable, Iterator, List, Optional, Protocol, Sequence
 
 from agent_backends import (
     BACKEND_CLAUDE,
@@ -261,6 +262,25 @@ def _content_text(content: object, kinds: Sequence[str]) -> str:
     return "\n\n".join(parts)
 
 
+class CancelSignal(Protocol):
+    def is_set(self) -> bool: ...
+
+
+class OpeningCancelled(Exception):
+    """A read was stopped at a checkpoint because its opening was cancelled."""
+
+
+# Set by prepare_conversation for the duration of one read, so every reader's
+# record loop can stop at a checkpoint without each reader taking a new argument.
+_cancel: ContextVar[Optional[CancelSignal]] = ContextVar("history_cancel", default=None)
+
+
+def _checkpoint() -> None:
+    signal = _cancel.get()
+    if signal is not None and signal.is_set():
+        raise OpeningCancelled
+
+
 def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
     """Yield the JSON objects in a JSONL transcript, skipping unreadable lines.
 
@@ -271,6 +291,7 @@ def _iter_jsonl(path: Path, limit: Optional[int] = None) -> Iterator[dict]:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for count, line in enumerate(handle):
+                _checkpoint()
                 if limit is not None and count >= limit:
                     return
                 line = line.strip()
@@ -1723,16 +1744,21 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
     TaskCreate its id) and Copilot's update_todo checklists. Other backends,
     and a transcript too large to read, give an empty list.
     """
+    return _replay_tasks(entry)[0]
+
+
+def _replay_tasks(entry: HistoryEntry) -> tuple[TaskList, str]:
+    """The task list and, if it could not be restored, why. Unsupported is not a failure."""
     tasks = TaskList()
     backend = normalize_backend(entry.backend)
     path = Path(entry.path)
+    if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT):
+        return tasks, ""
     try:
-        if backend not in (BACKEND_CLAUDE, BACKEND_COPILOT) or (
-            path.stat().st_size > _MAX_TRANSCRIPT_BYTES
-        ):
-            return tasks
+        if path.stat().st_size > _MAX_TRANSCRIPT_BYTES:
+            return tasks, "The task list was too large to restore, so it starts empty."
     except OSError:
-        return tasks
+        return tasks, "The task list could not be read, so it starts empty."
     calls: dict[str, tuple[str, dict]] = {}
     for record in _iter_jsonl(path):
         if backend == BACKEND_COPILOT:
@@ -1760,7 +1786,37 @@ def restore_tasks(entry: HistoryEntry) -> TaskList:
                     if isinstance(block.get("content"), str):
                         result = block["content"]
                     tasks.apply_claude(call[0], call[1], result)
-    return tasks
+    return tasks, ""
+
+
+@dataclass
+class PreparedConversation:
+    """A past conversation read back in full, ready to hand to the GUI thread."""
+
+    turns: List[HistoryTurn]
+    tasks: TaskList
+    task_warning: str = ""
+
+
+def prepare_conversation(
+    entry: HistoryEntry, cancel: Optional[CancelSignal] = None
+) -> Optional[PreparedConversation]:
+    """Read a conversation's turns and task list together, away from the GUI thread.
+
+    Returns None if ``cancel`` is set before the read finishes: a cancelled
+    opening yields no partial conversation.
+    """
+    token = _cancel.set(cancel)
+    try:
+        _checkpoint()
+        turns = load_turns(entry)
+        _checkpoint()
+        tasks, warning = _replay_tasks(entry)
+        return PreparedConversation(turns, tasks, warning)
+    except OpeningCancelled:
+        return None
+    finally:
+        _cancel.reset(token)
 
 
 def describe_age(modified: float, now: Optional[float] = None) -> str:
