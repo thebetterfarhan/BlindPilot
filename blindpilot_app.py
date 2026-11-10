@@ -145,6 +145,7 @@ from agent_backends import (
     prewarm_freebuff,
     spawn_hidden_terminal,
     subprocess_env,
+    TurnCallbacks,
     worker_class,
 )
 from questions import (
@@ -9647,21 +9648,20 @@ class SessionPanel(wx.Panel):
             self.mode,
             model=model,
             effort=effort,
-            on_session=lambda sid: self._queue_worker_event("session", sid),
-            on_started=lambda: self._queue_worker_event("started"),
-            on_activity=lambda kind, text: self._queue_worker_event("activity", kind, text),
-            on_complete=self._worker_complete,
-            on_failed=lambda msg: self._queue_worker_event("failed", msg),
-            on_done=lambda: self._queue_worker_event("done"),
-            on_question=self._ask_questions,
-            on_subagent=lambda *report: self._queue_worker_event("subagent", *report),
-            # A Claude turn brings its own, which holds the tab weakly.
-            **{
-                "on_permission": lambda tool, payload, suggestions: self._ask_permission(
+            callbacks=TurnCallbacks(
+                on_session=lambda sid: self._queue_worker_event("session", sid),
+                on_started=lambda: self._queue_worker_event("started"),
+                on_activity=lambda kind, text: self._queue_worker_event("activity", kind, text),
+                on_complete=self._worker_complete,
+                on_failed=lambda msg: self._queue_worker_event("failed", msg),
+                on_done=lambda: self._queue_worker_event("done"),
+                on_question=self._ask_questions,
+                on_subagent=lambda *report: self._queue_worker_event("subagent", *report),
+                on_permission=lambda tool, payload, suggestions: self._ask_permission(
                     selected_backend, tool, payload, suggestions
                 ),
-                **extra,
-            },
+            ),
+            **extra,
         )
         # Set rather than passed: only the Claude and Codex workers look for it.
         cast(Any, self._worker).on_tasks = lambda *call: self._queue_worker_event("tasks", *call)
@@ -10275,14 +10275,16 @@ class SessionPanel(wx.Panel):
             self.mode,
             model=self.model,
             effort=self.effort,
-            on_session=lambda sid: self._queue_worker_event("session", sid),
-            on_started=lambda: self._queue_worker_event("started"),
-            on_activity=lambda kind, text: self._queue_worker_event("activity", kind, text),
-            on_complete=self._worker_complete,
-            on_failed=lambda msg: self._queue_worker_event("failed", msg),
-            on_done=lambda: self._queue_worker_event("done"),
-            on_question=self._ask_questions,
-            on_subagent=lambda *report: self._queue_worker_event("subagent", *report),
+            callbacks=TurnCallbacks(
+                on_session=lambda sid: self._queue_worker_event("session", sid),
+                on_started=lambda: self._queue_worker_event("started"),
+                on_activity=lambda kind, text: self._queue_worker_event("activity", kind, text),
+                on_complete=self._worker_complete,
+                on_failed=lambda msg: self._queue_worker_event("failed", msg),
+                on_done=lambda: self._queue_worker_event("done"),
+                on_question=self._ask_questions,
+                on_subagent=lambda *report: self._queue_worker_event("subagent", *report),
+            ),
             **extra,
         )
         self._worker.start()

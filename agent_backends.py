@@ -80,6 +80,29 @@ _freebuff_catalog_cache: tuple[tuple[str, float, int], list[str]] | None = None
 # as it was, and an empty line adds nothing to the agent's log.
 SubagentReport = Callable[[str, str, str, str], None]
 
+
+@dataclass(frozen=True)
+class TurnCallbacks:
+    """Named bundle of the nine callbacks every turn worker accepts.
+
+    Before this, `_TurnWorker.__init__` listed all nine as keyword parameters,
+    so every construction site in the window named them all. Adding a new
+    callback required a grep-and-replace across every call site. With the
+    bundle, a new field is optional by default and costs nothing at existing
+    call sites.
+    """
+
+    on_session: Callable[[str], None]
+    on_started: Callable[[], None]
+    on_activity: Callable[[str, str], None]
+    on_complete: Callable[[str], None]
+    on_failed: Callable[[str], None]
+    on_done: Callable[[], None]
+    on_question: Optional["questions.AskQuestions"] = None
+    on_permission: Optional[Callable[[str, dict, list], dict]] = None
+    on_subagent: Optional[SubagentReport] = None
+
+
 SUBAGENT_RUNNING = "running"
 SUBAGENT_COMPLETED = "completed"
 SUBAGENT_FAILED = "failed"
@@ -2390,15 +2413,7 @@ class _TurnWorker(threading.Thread):
         effort: str = "",
         compact: bool = False,
         attachments: tuple[str, ...] = (),
-        on_session: Callable[[str], None],
-        on_started: Callable[[], None],
-        on_activity: Callable[[str, str], None],
-        on_complete: Callable[[str], None],
-        on_failed: Callable[[str], None],
-        on_done: Callable[[], None],
-        on_question: Optional[questions.AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        callbacks: TurnCallbacks,
         plan_account: object = UNBOUND,
     ) -> None:
         super().__init__(daemon=True)
@@ -2415,15 +2430,15 @@ class _TurnWorker(threading.Thread):
         # Files handed to the turn itself rather than written into the prompt.
         # Only the backends that take them read this; the rest never see one.
         self._attachments = list(attachments or [])
-        self._on_session = on_session
-        self._on_started = on_started
-        self._on_activity = on_activity
-        self._on_complete = on_complete
-        self._on_failed = on_failed
-        self._on_done = on_done
-        self._on_question = on_question
-        self._on_permission = on_permission
-        self._on_subagent = on_subagent or ignore_subagents
+        self._on_session = callbacks.on_session
+        self._on_started = callbacks.on_started
+        self._on_activity = callbacks.on_activity
+        self._on_complete = callbacks.on_complete
+        self._on_failed = callbacks.on_failed
+        self._on_done = callbacks.on_done
+        self._on_question = callbacks.on_question
+        self._on_permission = callbacks.on_permission
+        self._on_subagent = callbacks.on_subagent or ignore_subagents
         # The Account the turn's conversation is bound to, or `UNBOUND` to take
         # the saved choice. Only Codex reads this; the rest never see one. It
         # is `object` because `None` is itself a binding -- Codex's own login.
@@ -2743,6 +2758,12 @@ def _copilot_account_lines() -> list[str]:
     return copilot_account_lines()
 
 
+def _claude_worker(claude_worker: AgentWorkerFactory) -> AgentWorkerFactory:
+    from claude_backend import ClaudeWorker
+
+    return ClaudeWorker
+
+
 def _hermes_worker(_claude: AgentWorkerFactory) -> AgentWorkerFactory:
     from hermes_worker import HermesWorker
 
@@ -2794,7 +2815,7 @@ ADAPTERS: dict[str, BackendAdapter] = {
         usage_lines=lambda binary, timeout: _usage_lines(
             _claude_usage_windows(_claude_usage_payload(binary, timeout))
         ),
-        worker=lambda claude_worker: claude_worker,
+        worker=_claude_worker,
     ),
     BACKEND_CODEX: BackendAdapter(
         auth_ok=_cli_signed_in(BACKEND_CODEX, ("login", "status")),

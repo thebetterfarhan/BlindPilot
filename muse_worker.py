@@ -35,19 +35,18 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Optional, Sequence
 
 from agent_backends import (
     SUBAGENT_COMPLETED,
     SUBAGENT_FAILED,
     SUBAGENT_RUNNING,
-    SubagentReport,
+    TurnCallbacks,
     ignore_subagents,
     subagent_line,
     subagent_status,
 )
 from questions import (
-    AskQuestions,
     Question,
     QuestionOption,
 )
@@ -187,15 +186,7 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         compact: bool = False,
         resume_only: bool = False,
         attachments: Optional[Sequence[str]] = None,
-        on_session: Callable[[str], None],
-        on_started: Callable[[], None],
-        on_activity: Callable[[str, str], None],
-        on_complete: Callable[[str], None],
-        on_failed: Callable[[str], None],
-        on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        callbacks: TurnCallbacks,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -207,17 +198,17 @@ class MuseWorker(JsonRpcCalls, threading.Thread):
         self._compact = compact
         self._resume_only = resume_only
         self._attachments = list(attachments or [])
-        self._on_session = on_session
-        self._on_started = on_started
-        self._on_activity = on_activity
-        self._on_complete = on_complete
-        self._on_failed = on_failed
-        self._on_done = on_done
-        self._on_question = on_question
+        self._on_session = callbacks.on_session
+        self._on_started = callbacks.on_started
+        self._on_activity = callbacks.on_activity
+        self._on_complete = callbacks.on_complete
+        self._on_failed = callbacks.on_failed
+        self._on_done = callbacks.on_done
+        self._on_question = callbacks.on_question
         # Accepted for parity with upstream workers; not yet wired to a
         # Muse approval request.
-        self._on_permission = on_permission
-        self._on_subagent = on_subagent or ignore_subagents
+        self._on_permission = callbacks.on_permission
+        self._on_subagent = callbacks.on_subagent or ignore_subagents
 
         self._transport: Optional[StdioTransport] = None
         self._cancelled = False
