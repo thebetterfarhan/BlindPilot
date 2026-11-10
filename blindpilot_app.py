@@ -163,7 +163,6 @@ from hermes_backend import (
     hermes_model_options,
     hermes_session_catalog,
     remote_ws_url,
-    wsl_path_to_windows,
 )
 from muse_backend import (
     muse_command,
@@ -16277,18 +16276,7 @@ class MainFrame(wx.Frame):
             if prepared.task_warning:
                 announce(prepared.task_warning)
             return
-        cwd = self._history_cwd()
-        if entry.cwd:
-            candidate = entry.cwd
-            if not os.path.isdir(candidate):
-                # A Hermes in WSL records its own form of the path, which
-                # Windows cannot open. Translate it back before giving up,
-                # otherwise a resumed conversation quietly reopens in whatever
-                # folder happened to be current.
-                translated = wsl_path_to_windows(candidate)
-                candidate = translated if os.path.isdir(translated) else ""
-            if candidate:
-                cwd = candidate
+        cwd = prepared.resolved_cwd or self._history_cwd()
         panel = self._add_session(cwd, open_main_chat=False)
         # restore_history reports the conversation's name, which is what
         # renames the tab: that title is what tells this conversation apart
