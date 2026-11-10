@@ -16262,13 +16262,9 @@ class MainFrame(wx.Frame):
             return
         turns = prepared.turns
         if not entry.resumable:
-            text = "\n\n".join(
-                f"{label}: {value}"
-                for turn in turns
-                for label, value in (("You", turn.prompt), ("Answer", turn.response))
-                if value.strip()
+            dialog = ReadView(
+                self, prepared.read_only_text, f"{entry.title} — FreeBuff Desktop, read only"
             )
-            dialog = ReadView(self, text, f"{entry.title} — FreeBuff Desktop, read only")
             try:
                 dialog.ShowModal()
             finally:
