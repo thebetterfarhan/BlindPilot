@@ -338,10 +338,9 @@ class Earcons:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                self._loop_proc = proc
                 if stop.is_set():
                     proc.kill()
-                    return
-                self._loop_proc = proc
                 proc.wait()
             except Exception:
                 return

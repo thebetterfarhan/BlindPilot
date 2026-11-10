@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import sqlite3
 import threading
 from pathlib import Path
 from threading import Event
@@ -52,6 +53,41 @@ MESSAGE_INPUT_HEIGHT = 90
 ATTACHMENT_LIST_HEIGHT = 62
 EDIT_DIALOG_SIZE = wx.Size(650, 450)
 EDIT_DIALOG_MIN_SIZE = wx.Size(500, 300)
+
+
+def _read_attachments(paths, existing_paths, total_size, cancel):
+    attachments: list[MessageAttachment] = []
+    errors: list[str] = []
+    for selected_path in paths:
+        if cancel.is_set():
+            break
+        path = Path(selected_path)
+        try:
+            resolved = str(path.resolve())
+            if resolved.casefold() in existing_paths:
+                continue
+            remaining = MAX_TOTAL_ATTACHMENT_BYTES - total_size
+            if path.stat().st_size > remaining:
+                raise ValueError("adding this file would exceed the 100 MB total attachment limit.")
+            with path.open("rb") as handle:
+                data = handle.read(remaining + 1)
+            if len(data) > remaining:
+                raise ValueError("adding this file would exceed the 100 MB total attachment limit.")
+            if cancel.is_set():
+                break
+            attachments.append(
+                MessageAttachment(
+                    filename=path.name,
+                    mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                    data=data,
+                    source_path=resolved,
+                )
+            )
+            existing_paths.add(resolved.casefold())
+            total_size += len(data)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{path.name}: {exc}")
+    return attachments, errors
 
 
 class _ActionState:
@@ -105,6 +141,7 @@ class ChatPanel(wx.Panel):
         self.current_profile: Profile | None = None
         self.generation_cancel: Event | None = None
         self.generating = False
+        self._unsaved_response: Message | None = None
         self.assistant_buffer = ""
         # The thinking a reasoning model does, kept apart from its answer, and
         # the History entry it is being written into for this turn.
@@ -114,6 +151,9 @@ class ChatPanel(wx.Panel):
         self.assistant_announcement_buffer = ""
         self.assistant_announcement_timer: wx.CallLater | None = None
         self.pending_attachments: list[MessageAttachment] = []
+        self._attachment_serial = 0
+        self._attachment_cancel: Event | None = None
+        self._attachments_loading = False
         self.history_entries: list[Message] = []
         self.history_view = "list"
         self.regenerating_message_id: int | None = None
@@ -142,6 +182,7 @@ class ChatPanel(wx.Panel):
 
     def shutdown(self) -> None:
         self.closing = True
+        self._cancel_attachment_load()
         self._cancel_response_announcement_timer()
         self.assistant_announcement_buffer = ""
         if self.generation_cancel:
@@ -537,6 +578,8 @@ class ChatPanel(wx.Panel):
             self.attachment_list.GetParent().Layout()
 
     def on_add_files(self, event: wx.CommandEvent) -> None:
+        if self.generating or self._attachments_loading:
+            return
         dialog = wx.FileDialog(
             self,
             message="Attach files",
@@ -551,41 +594,49 @@ class ChatPanel(wx.Panel):
         finally:
             dialog.Destroy()
 
-        existing_paths = {
-            attachment.source_path.casefold() for attachment in self.pending_attachments
-        }
-        total_size = sum(len(attachment.data) for attachment in self.pending_attachments)
-        added = 0
-        errors: list[str] = []
-        for selected_path in selected_paths:
-            path = Path(selected_path)
-            resolved = str(path.resolve())
-            if resolved.casefold() in existing_paths:
-                continue
-            try:
-                size = path.stat().st_size
-                if total_size + size > MAX_TOTAL_ATTACHMENT_BYTES:
-                    errors.append(
-                        f"{path.name}: adding this file would exceed the 100 MB total attachment limit."
-                    )
-                    continue
-                data = path.read_bytes()
-            except OSError as exc:
-                errors.append(f"{path.name}: {exc}")
-                continue
-            mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            self.pending_attachments.append(
-                MessageAttachment(
-                    filename=path.name,
-                    mime_type=mime_type,
-                    data=data,
-                    source_path=resolved,
-                )
-            )
-            existing_paths.add(resolved.casefold())
-            total_size += len(data)
-            added += 1
+        existing_paths = {a.source_path.casefold() for a in self.pending_attachments}
+        total_size = sum(len(a.data) for a in self.pending_attachments)
+        self._attachment_serial += 1
+        serial = self._attachment_serial
+        cancel = Event()
+        self._attachment_cancel = cancel
+        self._attachments_loading = True
+        self.add_files_button.Disable()
+        self.send_button.Disable()
+        self.regenerate_button.Disable()
+        self.remove_files_button.Disable()
+        self.clear_files_button.Disable()
+        self.SetStatusText("Loading attachments...")
 
+        def work() -> None:
+            attachments, errors = _read_attachments(
+                selected_paths, existing_paths, total_size, cancel
+            )
+            if not cancel.is_set() and not self.closing:
+                wx.CallAfter(self._attachments_loaded, serial, attachments, errors)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _cancel_attachment_load(self) -> None:
+        self._attachment_serial += 1
+        if self._attachment_cancel is not None:
+            self._attachment_cancel.set()
+        self._attachment_cancel = None
+        self._attachments_loading = False
+        if not self.closing:
+            self.send_button.Enable()
+            self.add_files_button.Enable(not self.generating)
+            self._update_regenerate_enabled()
+
+    def _attachments_loaded(self, serial, attachments, errors) -> None:
+        if not self or self.closing or serial != self._attachment_serial:
+            return
+        self._attachments_loading = False
+        self._attachment_cancel = None
+        self.pending_attachments.extend(attachments)
+        self.send_button.Enable()
+        self.add_files_button.Enable(not self.generating)
+        self._update_regenerate_enabled()
         self._refresh_attachment_list()
         if self.pending_attachments:
             self.attachment_list.SetSelection(len(self.pending_attachments) - 1)
@@ -593,14 +644,18 @@ class ChatPanel(wx.Panel):
             self.attachment_list.SetFocus()
         else:
             self.add_files_button.SetFocus()
-        if added:
-            self.SetStatusText(f"Added {added} files; {len(self.pending_attachments)} attached.")
+        if attachments:
+            self.SetStatusText(
+                f"Added {len(attachments)} files; {len(self.pending_attachments)} attached."
+            )
         if errors:
             wx.MessageBox("\n".join(errors), "Could Not Attach Files", wx.OK | wx.ICON_ERROR, self)
 
     def on_attachment_selection(self, event: wx.CommandEvent | None) -> None:
         self.remove_files_button.Enable(
-            bool(self.attachment_list.GetSelections()) and not self.generating
+            bool(self.attachment_list.GetSelections())
+            and not self.generating
+            and not self._attachments_loading
         )
         if event is not None:
             event.Skip()
@@ -624,6 +679,7 @@ class ChatPanel(wx.Panel):
         self.SetStatusText(f"{len(self.pending_attachments)} files attached.")
 
     def on_clear_files(self, event: wx.CommandEvent) -> None:
+        self._cancel_attachment_load()
         self.pending_attachments.clear()
         self._refresh_attachment_list()
         self.add_files_button.SetFocus()
@@ -656,16 +712,13 @@ class ChatPanel(wx.Panel):
                 if account.id == previous_id:
                     selection = index
                     break
-        if selection == wx.NOT_FOUND and self.accounts:
+        if selection == wx.NOT_FOUND and self.accounts and self.current_conversation_id is None:
             # Nothing was selected before, so this is the window opening: the
             # account marked as the default is the one to open on, and the
             # first alphabetically only where no default has been marked.
             selection = self._default_index(self.accounts, 0)
-        if selection != wx.NOT_FOUND:
-            self.account_choice.SetSelection(selection)
-            self.load_cached_models()
-        else:
-            self.model_combo.Set([])
+        self.account_choice.SetSelection(selection)
+        self.load_cached_models()
 
     def reload_profiles(self) -> None:
         previous = self.selected_profile().id if self.profiles and self.selected_profile() else None
@@ -807,10 +860,13 @@ class ChatPanel(wx.Panel):
         goes somewhere else -- which is the whole reason the conversation
         carries them.
         """
+        if not self._save_pending_response():
+            return
         conversation = self.db.get_conversation(conversation_id)
         if conversation is None:
             self.SetStatusText("That conversation is no longer there.")
             return
+        self._cancel_attachment_load()
         self.current_conversation_id = conversation_id
         self.current_system_prompt = conversation.system_prompt_snapshot
         self.current_profile_id = conversation.profile_id
@@ -828,6 +884,7 @@ class ChatPanel(wx.Panel):
                 break
         else:
             self.profile_choice.SetSelection(0)
+        self.account_choice.SetSelection(wx.NOT_FOUND)
         for index, account in enumerate(self.accounts):
             if account.id == conversation.account_id:
                 self.account_choice.SetSelection(index)
@@ -878,7 +935,7 @@ class ChatPanel(wx.Panel):
                 if not self.closing:
                     wx.CallAfter(self._models_refreshed, account.id, models, None)
             except Exception as exc:
-                logger.exception("Model refresh failed for account name=%s", account.name)
+                logger.error("Model refresh failed")
                 if not self.closing:
                     wx.CallAfter(self._models_refreshed, account.id, [], exc)
 
@@ -909,6 +966,9 @@ class ChatPanel(wx.Panel):
                 self,
             )
             return
+        if not self._save_pending_response():
+            return
+        self._cancel_attachment_load()
         self.current_conversation_id = None
         self.current_system_prompt = ""
         self.current_profile_id = None
@@ -996,7 +1056,11 @@ class ChatPanel(wx.Panel):
         return last
 
     def _update_regenerate_enabled(self) -> None:
-        enabled = not self.generating and self._last_assistant_message() is not None
+        enabled = (
+            not self.generating
+            and not self._attachments_loading
+            and self._last_assistant_message() is not None
+        )
         self.regenerate_button.Enable(enabled)
 
     @staticmethod
@@ -1061,6 +1125,10 @@ class ChatPanel(wx.Panel):
         self._restore_history_review_selection(selection)
 
     def on_send(self, event: wx.CommandEvent | None) -> None:
+        if self._attachments_loading:
+            self.SetStatusText("Wait for the attachments to finish loading.")
+            self._speak("Wait for the attachments to finish loading.")
+            return
         account = self.selected_account()
         model = self.model_combo.GetStringSelection().strip()
         user_text = self.message_input.GetValue().strip()
@@ -1078,6 +1146,8 @@ class ChatPanel(wx.Panel):
             # speaks, and a message that silently goes nowhere is the worst case
             # for someone who cannot see that nothing happened.
             self._speak(message)
+            return
+        if not self._save_pending_response():
             return
         if not account:
             wx.MessageBox(
@@ -1126,6 +1196,10 @@ class ChatPanel(wx.Panel):
         self._start_generation(account, model, settings, regenerating=False)
 
     def on_regenerate(self, event: wx.CommandEvent | None) -> None:
+        if self._attachments_loading:
+            self.SetStatusText("Wait for the attachments to finish loading.")
+            self._speak("Wait for the attachments to finish loading.")
+            return
         if self.generating:
             message = "A response is already being generated."
             self.SetStatusText(message)
@@ -1133,6 +1207,8 @@ class ChatPanel(wx.Panel):
             # speaks, and a message that silently goes nowhere is the worst case
             # for someone who cannot see that nothing happened.
             self._speak(message)
+            return
+        if not self._save_pending_response():
             return
         account = self.selected_account()
         model = self.model_combo.GetStringSelection().strip()
@@ -1181,7 +1257,8 @@ class ChatPanel(wx.Panel):
         self.last_generation_status = ""
         self._cancel_response_announcement_timer()
         self.assistant_announcement_buffer = ""
-        self.generation_cancel = Event()
+        cancel = Event()
+        self.generation_cancel = cancel
         self.regenerate_button.Disable()
         self.add_files_button.Disable()
         self.remove_files_button.Disable()
@@ -1200,20 +1277,20 @@ class ChatPanel(wx.Panel):
         def work() -> None:
             error: Exception | None = None
             try:
-                for stream_event in self.generation_service.generate(
-                    account, settings, self.generation_cancel
-                ):
+                for stream_event in self.generation_service.generate(account, settings, cancel):
+                    if cancel.is_set():
+                        break
                     if stream_event.kind == "status":
                         if stream_event.text:
                             wx.CallAfter(
+                                self._generation_callback,
+                                cancel,
                                 self._report_generation_status,
                                 stream_event.text,
                                 bool(stream_event.metadata.get("record")),
                                 bool(stream_event.metadata.get("quiet")),
                             )
                         continue
-                    if self.generation_cancel.is_set():
-                        break
                     if stream_event.kind == "headers":
                         cache_status = self._header_value(
                             stream_event.metadata, "x-openrouter-cache-status"
@@ -1225,20 +1302,46 @@ class ChatPanel(wx.Panel):
                         # same path a batch's progress does: spoken once, and
                         # left in History so the answer can be read back
                         # knowing what was consulted to produce it.
-                        wx.CallAfter(self._report_generation_status, stream_event.text, True, False)
+                        wx.CallAfter(
+                            self._generation_callback,
+                            cancel,
+                            self._report_generation_status,
+                            stream_event.text,
+                            True,
+                            False,
+                        )
                     elif stream_event.kind == "reasoning" and stream_event.text:
-                        wx.CallAfter(self._append_assistant_reasoning, stream_event.text)
+                        wx.CallAfter(
+                            self._generation_callback,
+                            cancel,
+                            self._append_assistant_reasoning,
+                            stream_event.text,
+                        )
                     elif stream_event.kind == "sources" and stream_event.text:
-                        wx.CallAfter(self._append_assistant_sources, stream_event.text)
+                        wx.CallAfter(
+                            self._generation_callback,
+                            cancel,
+                            self._append_assistant_sources,
+                            stream_event.text,
+                        )
                     elif stream_event.kind == "text" and stream_event.text:
-                        wx.CallAfter(self._append_assistant_text, stream_event.text)
+                        wx.CallAfter(
+                            self._generation_callback,
+                            cancel,
+                            self._append_assistant_text,
+                            stream_event.text,
+                        )
             except Exception as exc:
                 error = exc
-                logger.exception("Generation failed")
+                logger.error("Generation failed")
             if not self.closing:
-                wx.CallAfter(self._generation_finished, error)
+                wx.CallAfter(self._generation_callback, cancel, self._generation_finished, error)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _generation_callback(self, cancel: Event, callback, *args) -> None:
+        if self and not self.closing and self.generation_cancel is cancel:
+            callback(*args)
 
     @staticmethod
     def _header_value(headers: dict, name: str) -> str:
@@ -1364,41 +1467,70 @@ class ChatPanel(wx.Panel):
         if text and self._response_announcements_allowed():
             self._speak(text)
 
+    def _save_pending_response(self) -> bool:
+        message = self._unsaved_response
+        if message is None:
+            return True
+        new_message = message.id is None
+        try:
+            if new_message:
+                self.db.add_message(message)
+            else:
+                self.db.update_message_content(int(message.id), message.content)
+        except (sqlite3.Error, OSError):
+            if new_message:
+                # add_message assigns an id before its transaction commits.
+                message.id = None
+            text = (
+                "Response could not be saved. Free disk space and try again. You can still copy it."
+            )
+            self.SetStatusText(text)
+            self._speak(text)
+            return False
+        self._unsaved_response = None
+        return True
+
     def _generation_finished(self, error: Exception | None) -> None:
         if self.closing:
             return
         was_cancelled = bool(self.generation_cancel and self.generation_cancel.is_set())
         regenerated_message_id = self.regenerating_message_id
         was_regenerating = regenerated_message_id is not None
-        if (
-            self.current_conversation_id is not None
-            and self.assistant_buffer
-            and not error
-            and not was_cancelled
-        ):
-            if regenerated_message_id is not None:
-                self.db.update_message_content(regenerated_message_id, self.assistant_buffer)
-            else:
-                assistant_message = Message(
-                    conversation_id=self.current_conversation_id,
-                    role="assistant",
-                    content=self.assistant_buffer,
-                )
-                self.db.add_message(assistant_message)
-                if self.history_entries and self.history_entries[-1].id is None:
-                    self.history_entries[-1] = assistant_message
-                    self.history_list.SetString(
-                        len(self.history_entries) - 1,
-                        self._history_list_label(assistant_message),
+        save_failed = False
+        try:
+            if self.current_conversation_id is not None and self.assistant_buffer:
+                if not was_regenerating or (not error and not was_cancelled):
+                    text = self.assistant_buffer
+                    if not was_regenerating and (error or was_cancelled):
+                        text += "\n\n[Response interrupted]"
+                    message = Message(
+                        id=regenerated_message_id,
+                        conversation_id=self.current_conversation_id,
+                        role="assistant",
+                        content=text,
                     )
-        self.generating = False
-        self.generation_cancel = None
-        self.regenerating_message_id = None
-        self.stop_button.Disable()
-        self.add_files_button.Enable()
-        self._refresh_attachment_list()
-        self._update_regenerate_enabled()
-        self._flush_response_announcement()
+                    self._unsaved_response = message
+                    save_failed = not self._save_pending_response()
+                    for index in range(len(self.history_entries) - 1, -1, -1):
+                        entry = self.history_entries[index]
+                        if entry.role == "assistant" and (
+                            entry.id is None or entry.id == message.id
+                        ):
+                            self.history_entries[index] = message
+                            self.history_list.SetString(index, self._history_list_label(message))
+                            break
+        finally:
+            self.generating = False
+            self.generation_cancel = None
+            self.regenerating_message_id = None
+            self.stop_button.Disable()
+            self.add_files_button.Enable()
+            self._refresh_attachment_list()
+            self._update_regenerate_enabled()
+            self._flush_response_announcement()
+
+        if save_failed:
+            return
 
         if error:
             if was_regenerating:
@@ -1429,8 +1561,7 @@ class ChatPanel(wx.Panel):
     def on_stop(self, event: wx.CommandEvent | None) -> None:
         if self.generation_cancel:
             self.generation_cancel.set()
-            self.stop_button.Disable()
-            self.SetStatusText("Stopping generation...")
+            self._generation_finished(None)
 
     def on_char_hook(self, event: wx.KeyEvent) -> None:
         key = event.GetKeyCode()

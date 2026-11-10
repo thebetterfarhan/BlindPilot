@@ -68,13 +68,13 @@ def _raise_choice_error(choice: dict[str, Any]) -> None:
 
 
 def attachment_content_part(attachment: MessageAttachment) -> dict[str, Any]:
-    encoded = base64.b64encode(attachment.data).decode("ascii")
     mime_type = attachment.mime_type or "application/octet-stream"
     suffix = PurePath(attachment.filename).suffix.lower()
 
     if mime_type.startswith("text/") or suffix in TEXT_EXTENSIONS:
         text = attachment.data.decode("utf-8", errors="replace")
         return {"type": "text", "text": f"[Attached file: {attachment.filename}]\n{text}"}
+    encoded = base64.b64encode(attachment.data).decode("ascii")
     if mime_type.startswith("image/"):
         return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}}
     if mime_type.startswith("audio/"):

@@ -13700,6 +13700,9 @@ class MainFrame(wx.Frame):
         # down by a check, where a timer firing mid-teardown crashed macOS.
         self._links_timer: Optional[wx.Timer] = None
         self._links_loading = False
+        self._session_link_queue: deque[str] = deque()
+        self._session_link_active = False
+        self._history_open_finished = None
         # Re-reads every tab's model catalog on a timer, so a model retired
         # upstream drops out of the picker on a window left open. Watched only
         # once the window is shown, like the links timer above.
@@ -16190,8 +16193,12 @@ class MainFrame(wx.Frame):
         else:
             wx.CallAfter(announce, f"Reopening {title or session_id}")
 
-    def _resume_history(self, entry: HistoryEntry, on_open=None) -> None:
+    def _resume_history(self, entry: HistoryEntry, on_open=None, on_finish=None) -> None:
         """Load one past conversation without holding the GUI callback."""
+        finished = getattr(self, "_history_open_finished", None)
+        self._history_open_finished = on_finish
+        if finished:
+            finished()
         old_cancel = getattr(self, "_history_open_cancel", None)
         if old_cancel is not None:
             old_cancel.set()
@@ -16285,6 +16292,12 @@ class MainFrame(wx.Frame):
             progress.Destroy()
         announce("Opening conversation cancelled")
 
+        finished = self._history_open_finished
+        self._history_open_finished = None
+        if finished:
+            finished()
+        _call_after_alive(self._start_next_session_link)
+
     def _announce_history_open_if_current(self, serial, cancel, text) -> None:
         if not self or serial != self._history_open_serial or cancel.is_set():
             return
@@ -16293,59 +16306,68 @@ class MainFrame(wx.Frame):
     def _history_open_loaded(self, serial, cancel, entry, prepared, error, on_open) -> None:
         if not self or serial != self._history_open_serial:
             return
-        self._history_open_cancel = None
-        progress = self._history_open_progress
-        self._history_open_progress = None
-        self._history_open_message = None
-        self._history_open_cancel_button = None
-        cancelled = cancel.is_set()
-        if progress is not None:
-            progress.Destroy()
-        if cancelled:
-            announce("Opening conversation cancelled")
-            return
-        if error:
-            announce(f"Error: Could not read {entry.title}: {error}")
-            return
-        if prepared is None or not prepared.turns:
-            announce(f"Error: {entry.title} could not be read back")
-            return
-        turns = prepared.turns
-        if not entry.resumable:
-            dialog = ReadView(
-                self, prepared.read_only_text, f"{entry.title} — FreeBuff Desktop, read only"
-            )
-            try:
-                dialog.ShowModal()
-            finally:
-                dialog.Destroy()
-            if prepared.task_warning:
-                announce(prepared.task_warning)
-            return
-        cwd = prepared.resolved_cwd or self._history_cwd()
-        panel = self._add_session(cwd, open_main_chat=False)
-        # restore_history reports the conversation's name, which is what
-        # renames the tab: that title is what tells this conversation apart
-        # from the others open in the same folder.
-        panel.restore_history(entry, turns, tasks=prepared.tasks, rows=prepared.rows)
-        # The resumed tab took the conversation's own backend.
-        self._follow_tab_backend()
-        responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"
-        wx.CallAfter(
-            self._announce_history_open_if_current,
-            serial,
-            cancel,
-            f"Resumed {entry.title}, {responses}",
-        )
-        if prepared.task_warning:
+        finished = self._history_open_finished
+        self._history_open_finished = None
+        try:
+            self._history_open_cancel = None
+            progress = self._history_open_progress
+            self._history_open_progress = None
+            self._history_open_message = None
+            self._history_open_cancel_button = None
+            cancelled = cancel.is_set()
+            if progress is not None:
+                progress.Destroy()
+            if cancelled:
+                announce("Opening conversation cancelled")
+                return
+            if error:
+                announce(f"Error: Could not read {entry.title}: {error}")
+                return
+            if prepared is None or not prepared.turns:
+                announce(f"Error: {entry.title} could not be read back")
+                return
+            turns = prepared.turns
+            if not entry.resumable:
+                dialog = ReadView(
+                    self, prepared.read_only_text, f"{entry.title} — FreeBuff Desktop, read only"
+                )
+                try:
+                    dialog.ShowModal()
+                finally:
+                    dialog.Destroy()
+                if prepared.task_warning:
+                    announce(prepared.task_warning)
+                return
+            cwd = prepared.resolved_cwd or self._history_cwd()
+            panel = self._add_session(cwd, open_main_chat=False)
+            # restore_history reports the conversation's name, which is what
+            # renames the tab: that title is what tells this conversation apart
+            # from the others open in the same folder.
+            panel.restore_history(entry, turns, tasks=prepared.tasks, rows=prepared.rows)
+            # The resumed tab took the conversation's own backend.
+            self._follow_tab_backend()
+            responses = "1 response" if len(turns) == 1 else f"{len(turns)} responses"
             wx.CallAfter(
                 self._announce_history_open_if_current,
                 serial,
                 cancel,
-                prepared.task_warning,
+                f"Resumed {entry.title}, {responses}",
             )
-        if on_open:
-            on_open(panel)
+            if prepared.task_warning:
+                wx.CallAfter(
+                    self._announce_history_open_if_current,
+                    serial,
+                    cancel,
+                    prepared.task_warning,
+                )
+            if on_open:
+                on_open(panel)
+
+        finally:
+            if finished:
+                finished()
+            if self:
+                _call_after_alive(self._start_next_session_link)
 
     def _find_in_all_conversations(self) -> None:
         """Search every past conversation's messages (Ctrl+Shift+S).
@@ -17000,18 +17022,34 @@ class MainFrame(wx.Frame):
             self.open_session_link(link)
 
     def open_session_link(self, link: str) -> None:
-        """Reopen the conversation a blindpilot:// link names. Nothing else, ever."""
+        """Queue each accepted link through lookup and completed history opening."""
         parsed = remote_sessions.parse_session_link(link)
         if parsed is None or parsed[0] not in BACKENDS:
             announce("That link isn't one BlindPilot knows.")
             return
+        self._session_link_queue.append(link)
+        self._start_next_session_link()
+
+    def _start_next_session_link(self) -> None:
+        if (
+            not self
+            or self._session_link_active
+            or self._history_open_cancel is not None
+            or not self._session_link_queue
+        ):
+            return
+        link = self._session_link_queue.popleft()
+        parsed = remote_sessions.parse_session_link(link)
+        assert parsed is not None
         backend, session_id = parsed
         for panel in self._session_panels():
             if panel._session_id == session_id:
                 self._select_session(self.notebook.FindPage(panel))
                 announce(f"{_tab_label(panel.tab_title, panel.cwd)} is already open")
+                _call_after_alive(self._start_next_session_link)
                 return
 
+        self._session_link_active = True
         serial = getattr(self, "_linked_lookup_serial", 0) + 1
         self._linked_lookup_serial = serial
 
@@ -17025,13 +17063,19 @@ class MainFrame(wx.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _session_link_finished(self) -> None:
+        self._session_link_active = False
+        if self:
+            _call_after_alive(self._start_next_session_link)
+
     def _open_linked(self, serial: int, entry: Optional[HistoryEntry]) -> None:
         if not self or serial != getattr(self, "_linked_lookup_serial", 0):
             return
         if entry is None:
             announce("The conversation that link names was not found on this computer.")
+            self._session_link_finished()
             return
-        self._resume_history(entry)
+        self._resume_history(entry, on_finish=self._session_link_finished)
 
     def watch_for_links(self) -> None:
         """Check every second for session links a second copy handed over."""

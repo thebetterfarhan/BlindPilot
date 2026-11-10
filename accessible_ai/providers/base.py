@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from threading import Event
+from threading import Event, Thread
+from queue import Empty, Full, Queue
 from typing import Any
 from urllib.parse import urljoin
 
@@ -102,8 +103,60 @@ class BaseProvider(ABC):
         raise NotImplementedError
 
 
+def _cancellable_lines(response: httpx.Response, cancel: Event) -> Iterator[str]:
+    """A silent socket read must not hold the caller after Stop."""
+    if cancel.is_set():
+        # Stop landed before streaming began: nothing will read this response,
+        # so it is closed here instead of being left open until its owner exits.
+        close = getattr(response, "close", None)
+        if close is not None:
+            close()
+        return
+    pending: Queue[object] = Queue(maxsize=1)
+    stopped = Event()
+    end = object()
+
+    def publish(value: object) -> None:
+        while not stopped.is_set() and not cancel.is_set():
+            try:
+                pending.put(value, timeout=0.05)
+                return
+            except Full:
+                pass
+
+    def read() -> None:
+        try:
+            for line in response.iter_lines():
+                if stopped.is_set() or cancel.is_set():
+                    return
+                publish(line)
+        except Exception as exc:
+            publish(exc)
+        finally:
+            publish(end)
+
+    Thread(target=read, daemon=True).start()
+    try:
+        while not cancel.is_set():
+            try:
+                value = pending.get(timeout=0.05)
+            except Empty:
+                continue
+            if value is end:
+                return
+            if isinstance(value, Exception):
+                raise value
+            assert isinstance(value, str)
+            yield value
+    finally:
+        stopped.set()
+        close = getattr(response, "close", None)
+        if close is not None:
+            close()
+
+
 def iter_sse_json(response: httpx.Response, cancel: Event) -> Iterator[dict[str, Any]]:
-    for raw_line in response.iter_lines():
+    for raw_line in _cancellable_lines(response, cancel):
         if cancel.is_set():
             return
         line = raw_line.strip()

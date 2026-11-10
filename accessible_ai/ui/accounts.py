@@ -1055,7 +1055,7 @@ class AccountsDialog(wx.Dialog):
                 models = self.model_service.refresh_models(account)
                 wx.CallAfter(self._model_action_done, f"{success_prefix} {len(models)} models.")
             except Exception as exc:
-                logger.exception("Model action failed for account name=%s", account.name)
+                logger.error("Model action failed")
                 wx.CallAfter(self._model_action_done, f"Error: {exc}", True)
 
         threading.Thread(target=work, daemon=True).start()
