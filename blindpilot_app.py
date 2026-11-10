@@ -6980,6 +6980,7 @@ class SessionPanel(wx.Panel):
         # Which changed-file discovery is current for this tab, so a worker
         # that finishes after a refresh cannot fill the list it replaced.
         self._changed_files_serial = 0
+        self._formatted_serial = 0
         # The same for slash-command probes, and the dialog they fill.
         self._slash_commands_serial = 0
         self._slash_dialog: Optional[SlashCommandDialog] = None
@@ -11155,21 +11156,46 @@ class SessionPanel(wx.Panel):
         screen reader's own keys move by heading, list, table and link. Falls
         back to the plain text view where no web view is available.
         """
+        self._formatted_serial += 1
+        serial = self._formatted_serial
         n = row.response_number
-        header = next(
-            (r for r in self._rows if r.kind == "header" and r.response_number == n), None
-        )
-        text = (
-            header.payload if header is not None and header.payload else reassemble(self._rows, n)
-        )
+        conversation = self._rows
+        # Streaming can update existing rows while the page is being prepared.
+        # Copy only this response, so the worker sees the requested version.
+        rows = [replace(r) for r in conversation if r.response_number == n]
         title = f"Response {n}"
-        dlg = FormattedView.open(self, markdown_page(text, title), title) or ReadView(
+
+        def work() -> None:
+            header = next((r for r in rows if r.kind == "header"), None)
+            text = header.payload if header is not None and header.payload else reassemble(rows, n)
+            try:
+                page = markdown_page(text, title)
+            except Exception:  # noqa: BLE001 - plain reading remains available if rendering fails
+                page = ""
+            _call_after_alive(
+                self._formatted_response_loaded, serial, conversation, text, page, title
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _formatted_response_loaded(self, serial, conversation, text, page, title) -> None:
+        """Open the prepared page only for the conversation that requested it."""
+        if not self or serial != self._formatted_serial or conversation is not self._rows:
+            return
+        book = self.GetParent()
+        if isinstance(book, wx.BookCtrlBase) and book.GetCurrentPage() is not self:
+            return
+        dlg = (FormattedView.open(self, page, title) if page else None) or ReadView(
             self, text, title
         )
         try:
             dlg.ShowModal()
         finally:
             dlg.Destroy()
+        if not self or serial != self._formatted_serial or conversation is not self._rows:
+            return
+        if isinstance(book, wx.BookCtrlBase) and book.GetCurrentPage() is not self:
+            return
         sel = self._selected_row()
         if sel != wx.NOT_FOUND:
             self._focus_row(sel)
