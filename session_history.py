@@ -384,7 +384,7 @@ class _JsonlFormat:
     # (``None`` for all of them). Claude Code's folder names *are* the working
     # directory, so it answers with one folder's files; the other two answer
     # with everything they have and are filtered by what they recorded.
-    paths: Callable[[Optional[str]], List[Path]]
+    paths: Callable[..., List[Path]]
 
     # The session id and working directory this record gives, or ``None`` if
     # it is not a record that gives them. Handed the file as well, because
@@ -403,11 +403,18 @@ class _JsonlFormat:
     scoped_by_recorded_cwd: bool = True
 
 
-def _globbed(root: Path, pattern: str) -> List[Path]:
+def _globbed(
+    root: Path, pattern: str, *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
     """Files matching ``pattern`` under ``root``, or none if it cannot be walked."""
     try:
-        return list(root.glob(pattern))
+        paths = []
+        for path in root.glob(pattern):
+            _check_cancelled(cancelled)
+            paths.append(path)
+        return paths
     except OSError:
+        _check_cancelled(cancelled)
         return []
 
 
@@ -416,7 +423,13 @@ _JSONL_HEAD_CACHE: dict[tuple[str, str, float], tuple[str, str, str]] = {}
 _JSONL_HEAD_CACHE_MAX = 1024
 
 
-def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, str, str]:
+def _jsonl_head(
+    fmt: _JsonlFormat,
+    path: Path,
+    modified: float,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> tuple[str, str, str]:
     """The transcript's id, its recorded directory, and its first prompt.
 
     Empty strings when the head holds nothing offerable. Kept while the file's
@@ -425,6 +438,7 @@ def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, st
     to derive the same three fields again. Capped rather than left to grow,
     since the transcripts a machine accumulates are never all of them seen.
     """
+    _check_cancelled(cancelled)
     key = (fmt.backend, str(path), modified)
     hit = _JSONL_HEAD_CACHE.get(key)
     if hit is not None:
@@ -432,7 +446,8 @@ def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, st
     session_id = ""
     session_cwd = ""
     title = ""
-    for record in _iter_jsonl(path, _MAX_HEAD_LINES):
+    for record in _iter_jsonl(path, _MAX_HEAD_LINES, cancelled=cancelled):
+        _check_cancelled(cancelled)
         said = fmt.session_of(path, record)
         if said is not None:
             # First answer wins: a later header missing a field must not wipe
@@ -449,15 +464,24 @@ def _jsonl_head(fmt: _JsonlFormat, path: Path, modified: float) -> tuple[str, st
     return session_id, session_cwd, title
 
 
-def _jsonl_entry(fmt: _JsonlFormat, path: Path, cwd: Optional[str]) -> Optional[HistoryEntry]:
+def _jsonl_entry(
+    fmt: _JsonlFormat,
+    path: Path,
+    cwd: Optional[str],
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> Optional[HistoryEntry]:
     """One transcript as a listing entry, or ``None`` if it cannot be offered.
 
     Reads only as far as the first thing the person typed, because that is the
     title and the newest conversations have to appear the moment the dialog
     opens.
     """
+    _check_cancelled(cancelled)
     modified = _mtime(path)
-    session_id, session_cwd, title = _jsonl_head(fmt, path, modified)
+    _check_cancelled(cancelled)
+    session_id, session_cwd, title = _jsonl_head(fmt, path, modified, cancelled=cancelled)
+    _check_cancelled(cancelled)
     if not session_id or not title:
         # Nothing was ever asked here, or there is no id to resume it by, so
         # there is nothing to carry on with either way.
@@ -476,10 +500,27 @@ def _jsonl_entry(fmt: _JsonlFormat, path: Path, cwd: Optional[str]) -> Optional[
     )
 
 
-def _jsonl_entries(fmt: _JsonlFormat, cwd: Optional[str]) -> List[HistoryEntry]:
+def _jsonl_entries(
+    fmt: _JsonlFormat,
+    cwd: Optional[str],
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> List[HistoryEntry]:
+    _check_cancelled(cancelled)
+    if cancelled is None:
+        paths = fmt.paths(cwd)
+    else:
+        paths = fmt.paths(cwd, cancelled=cancelled)
+    _check_cancelled(cancelled)
     entries: List[HistoryEntry] = []
-    for path in fmt.paths(cwd):
-        entry = _jsonl_entry(fmt, path, cwd)
+    for path in paths:
+        _check_cancelled(cancelled)
+        entry = (
+            _jsonl_entry(fmt, path, cwd)
+            if cancelled is None
+            else _jsonl_entry(fmt, path, cwd, cancelled=cancelled)
+        )
+        _check_cancelled(cancelled)
         if entry is not None:
             entries.append(entry)
     return entries
@@ -516,33 +557,61 @@ def claude_project_slug(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd or "")
 
 
-def _claude_project_dirs(cwd: Optional[str]) -> List[Path]:
+def _claude_project_dirs(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
+    _check_cancelled(cancelled)
     root = _home() / ".claude" / "projects"
     if cwd:
         exact = root / claude_project_slug(cwd)
-        return [exact] if exact.is_dir() else []
+        found = [exact] if exact.is_dir() else []
+        _check_cancelled(cancelled)
+        return found
     try:
-        found = sorted(path for path in root.iterdir() if path.is_dir())
+        found = []
+        for path in root.iterdir():
+            _check_cancelled(cancelled)
+            if path.is_dir():
+                found.append(path)
+        found.sort()
     except OSError:
+        _check_cancelled(cancelled)
         found = []
     # Claude Desktop's Cowork sessions run Claude Code in a sandbox folder of
     # their own, with their own config dir, so their transcripts sit inside
     # the desktop app's data rather than ~/.claude. They belong to no folder
     # of the user's, so they join only the all-folders list. (Its ordinary
     # chats live on claude.ai, not on this machine.)
-    return found + _globbed(
-        _claude_desktop_dir(), "local-agent-mode-sessions/*/*/local_*/.claude/projects/*"
+    desktop_dir = _claude_desktop_dir()
+    desktop_pattern = "local-agent-mode-sessions/*/*/local_*/.claude/projects/*"
+    desktop_paths = (
+        _globbed(desktop_dir, desktop_pattern)
+        if cancelled is None
+        else _globbed(desktop_dir, desktop_pattern, cancelled=cancelled)
     )
+    found.extend(desktop_paths)
+    _check_cancelled(cancelled)
+    return found
 
 
-def _claude_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _claude_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     """Claude Code's conversations, Cowork ones labelled as Claude Desktop's."""
-    return [
-        replace(entry, folder="Claude Desktop")
-        if "local-agent-mode-sessions" in entry.path
-        else entry
-        for entry in _jsonl_entries(_CLAUDE, cwd)
-    ]
+    entries = []
+    entries_from_files = (
+        _jsonl_entries(_CLAUDE, cwd)
+        if cancelled is None
+        else _jsonl_entries(_CLAUDE, cwd, cancelled=cancelled)
+    )
+    for entry in entries_from_files:
+        _check_cancelled(cancelled)
+        entries.append(
+            replace(entry, folder="Claude Desktop")
+            if "local-agent-mode-sessions" in entry.path
+            else entry
+        )
+    return entries
 
 
 def _claude_desktop_dir() -> Path:
@@ -555,8 +624,23 @@ def _claude_desktop_dir() -> Path:
     return _home() / ".config" / "Claude"
 
 
-def _claude_paths(cwd: Optional[str]) -> List[Path]:
-    return [path for folder in _claude_project_dirs(cwd) for path in _globbed(folder, "*.jsonl")]
+def _claude_paths(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
+    paths = []
+    folders = (
+        _claude_project_dirs(cwd)
+        if cancelled is None
+        else _claude_project_dirs(cwd, cancelled=cancelled)
+    )
+    for folder in folders:
+        _check_cancelled(cancelled)
+        paths.extend(
+            _globbed(folder, "*.jsonl")
+            if cancelled is None
+            else _globbed(folder, "*.jsonl", cancelled=cancelled)
+        )
+    return paths
 
 
 def _claude_session(path: Path, record: dict) -> tuple[str, str]:
@@ -618,10 +702,18 @@ _CLAUDE = _JsonlFormat(
 # ----- Codex -----
 
 
-def _codex_paths(_cwd: Optional[str]) -> List[Path]:
+def _codex_paths(
+    _cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
     # A folder per year, per month and per day, so the search goes all the
     # way down rather than one level.
-    return _globbed(_home() / ".codex" / "sessions", "**/*.jsonl")
+    _check_cancelled(cancelled)
+    root = _home() / ".codex" / "sessions"
+    return (
+        _globbed(root, "**/*.jsonl")
+        if cancelled is None
+        else _globbed(root, "**/*.jsonl", cancelled=cancelled)
+    )
 
 
 def _codex_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
@@ -689,9 +781,22 @@ def _commandcode_transcript(path: Path) -> bool:
     return not any(name.endswith(f"{side}.jsonl") for side in _COMMANDCODE_SIDECARS)
 
 
-def _commandcode_paths(_cwd: Optional[str]) -> List[Path]:
+def _commandcode_paths(
+    _cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
+    _check_cancelled(cancelled)
     root = _home() / ".commandcode" / "projects"
-    return [path for path in _globbed(root, "*/*.jsonl") if _commandcode_transcript(path)]
+    paths = (
+        _globbed(root, "*/*.jsonl")
+        if cancelled is None
+        else _globbed(root, "*/*.jsonl", cancelled=cancelled)
+    )
+    transcripts = []
+    for path in paths:
+        _check_cancelled(cancelled)
+        if _commandcode_transcript(path):
+            transcripts.append(path)
+    return transcripts
 
 
 def _commandcode_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
@@ -734,10 +839,18 @@ _COMMANDCODE = _JsonlFormat(
 # conversation. A subagent's messages carry ``parentToolCallId`` and stay out.
 
 
-def _copilot_paths(_cwd: Optional[str]) -> List[Path]:
+def _copilot_paths(
+    _cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
+    _check_cancelled(cancelled)
     home = os.environ.get("COPILOT_HOME", "").strip()
     root = Path(home) if home else _home() / ".copilot"
-    return _globbed(root / "session-state", "*/events.jsonl")
+    root = root / "session-state"
+    return (
+        _globbed(root, "*/events.jsonl")
+        if cancelled is None
+        else _globbed(root, "*/events.jsonl", cancelled=cancelled)
+    )
 
 
 def _copilot_session(_path: Path, record: dict) -> Optional[tuple[str, str]]:
@@ -813,7 +926,12 @@ def _hermes_db_path() -> Path:
     return root / "state.db"
 
 
-def _hermes_query(sql: str, params: Sequence = ()) -> List[dict]:
+def _hermes_query(
+    sql: str,
+    params: Sequence = (),
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> List[dict]:
     """Run one read-only query against Hermes' store, wherever it lives.
 
     Two routes, because Hermes keeps its store in WAL mode and that decides
@@ -828,14 +946,23 @@ def _hermes_query(sql: str, params: Sequence = ()) -> List[dict]:
 
     Returns a list of plain dicts so the caller never holds a connection.
     """
+    _check_cancelled(cancelled)
     path = _hermes_db_path()
     if path.is_file():
+        _check_cancelled(cancelled)
         connection = _hermes_connect(path)
         if connection is None:
+            _check_cancelled(cancelled)
             return []
         try:
-            return [dict(row) for row in connection.execute(sql, tuple(params)).fetchall()]
+            _check_cancelled(cancelled)
+            rows = [dict(row) for row in connection.execute(sql, tuple(params)).fetchall()]
+            _check_cancelled(cancelled)
+            return rows
+        except HistoryOpenCancelled:
+            raise
         except Exception:  # noqa: BLE001 - an older schema is not a crash
+            _check_cancelled(cancelled)
             return []
         finally:
             connection.close()
@@ -848,7 +975,10 @@ def _hermes_query(sql: str, params: Sequence = ()) -> List[dict]:
 
     from hermes_backend import wsl_sqlite_query
 
-    return wsl_sqlite_query(sql, params)
+    _check_cancelled(cancelled)
+    rows = wsl_sqlite_query(sql, params)
+    _check_cancelled(cancelled)
+    return rows
 
 
 def _hermes_connect(path: Path):
@@ -869,24 +999,28 @@ def _hermes_connect(path: Path):
         return None
 
 
-def _hermes_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _hermes_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
+    _check_cancelled(cancelled)
     path = _hermes_db_path()
     modified = _mtime(path) if path.is_file() else 0.0
+    _check_cancelled(cancelled)
     # Hermes titles its own conversations, so unlike the other backends there is
     # no transcript to scan for a first message. Sessions with no messages are
     # skipped: they are starts that never went anywhere.
-    rows = _hermes_query(
-        """
+    sql = """
         SELECT id, title, cwd, started_at, last_activity_at, message_count
         FROM sessions
         WHERE COALESCE(archived, 0) = 0 AND COALESCE(message_count, 0) > 0
         ORDER BY COALESCE(last_activity_at, started_at) DESC
         LIMIT 500
         """
-    )
+    rows = _hermes_query(sql) if cancelled is None else _hermes_query(sql, cancelled=cancelled)
     entries: List[HistoryEntry] = []
 
     for row in rows:
+        _check_cancelled(cancelled)
         session_id = str(row.get("id") or "")
         if not session_id:
             continue
@@ -929,15 +1063,17 @@ def _hermes_turns_for(
     not need to know whether Hermes runs here or in WSL.
     """
     _check_cancelled(cancelled)
-    rows = _hermes_query(
-        """
+    sql = """
         SELECT role, content, display_kind
         FROM messages
         WHERE session_id = ?
         ORDER BY id
         LIMIT ?
-        """,
-        (session_id, _HERMES_MAX_ROWS),
+        """
+    rows = (
+        _hermes_query(sql, (session_id, _HERMES_MAX_ROWS))
+        if cancelled is None
+        else _hermes_query(sql, (session_id, _HERMES_MAX_ROWS), cancelled=cancelled)
     )
     _check_cancelled(cancelled)
 
@@ -994,7 +1130,7 @@ LIMIT 500
 """
 
 
-def _muse_query() -> List[dict]:
+def _muse_query(*, cancelled: Optional[Callable[[], bool]] = None) -> List[dict]:
     """Every conversation Muse's index knows, newest first.
 
     A store on this machine is opened directly, read-only. On Windows the
@@ -1002,28 +1138,44 @@ def _muse_query() -> List[dict]:
     the \\\\wsl.localhost share -- so the query runs on WSL's side, the same
     route Hermes' history takes.
     """
+    _check_cancelled(cancelled)
     from muse_backend import muse_index_db
 
     path = muse_index_db()
+    _check_cancelled(cancelled)
     if path is not None:
         connection = _hermes_connect(path)
         if connection is None:
+            _check_cancelled(cancelled)
             return []
         try:
-            return [dict(row) for row in connection.execute(_MUSE_LIST_SQL).fetchall()]
+            _check_cancelled(cancelled)
+            rows = [dict(row) for row in connection.execute(_MUSE_LIST_SQL).fetchall()]
+            _check_cancelled(cancelled)
+            return rows
+        except HistoryOpenCancelled:
+            raise
         except Exception:  # noqa: BLE001 - an older schema is not a crash
+            _check_cancelled(cancelled)
             return []
         finally:
             connection.close()
 
     from muse_backend import wsl_muse_sqlite_query
 
-    return wsl_muse_sqlite_query(_MUSE_LIST_SQL)
+    _check_cancelled(cancelled)
+    rows = wsl_muse_sqlite_query(_MUSE_LIST_SQL)
+    _check_cancelled(cancelled)
+    return rows
 
 
-def _muse_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _muse_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     entries: List[HistoryEntry] = []
-    for row in _muse_query():
+    rows = _muse_query() if cancelled is None else _muse_query(cancelled=cancelled)
+    for row in rows:
+        _check_cancelled(cancelled)
         session_id = str(row.get("session_id") or "")
         if not session_id:
             continue
@@ -1086,22 +1238,37 @@ _CODEX_STATE_DB = "state_5.sqlite"
 _CODEX_HISTORY_DB = "thread_history_1.sqlite"
 
 
-def _codex_db_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _codex_db_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
+    _check_cancelled(cancelled)
     path = _home() / ".codex" / _CODEX_STATE_DB
     connection = _hermes_connect(path) if path.is_file() else None
     if connection is None:
+        _check_cancelled(cancelled)
         return []
     try:
-        rows = connection.execute(
+        _check_cancelled(cancelled)
+        cursor = connection.execute(
             "SELECT id, title, first_user_message, cwd, updated_at, rollout_path, source "
             "FROM threads WHERE archived = 0 AND source NOT LIKE '{%'"
-        ).fetchall()
+        )
+        _check_cancelled(cancelled)
+        rows = []
+        for row in cursor:
+            _check_cancelled(cancelled)
+            rows.append(row)
+        _check_cancelled(cancelled)
+    except HistoryOpenCancelled:
+        raise
     except Exception:  # noqa: BLE001 - another schema is not a crash
+        _check_cancelled(cancelled)
         return []
     finally:
         connection.close()
     entries: List[HistoryEntry] = []
     for row in rows:
+        _check_cancelled(cancelled)
         session_cwd = str(row["cwd"] or "").removeprefix("\\\\?\\")
         if cwd and not _same_dir(session_cwd, cwd):
             continue
@@ -1160,11 +1327,25 @@ def _codex_db_turns(
     return list(turns.values())
 
 
-def _codex_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _codex_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     """Codex conversations from its databases, plus any older JSONL rollouts."""
-    entries = _codex_db_entries(cwd)
+    entries = (
+        _codex_db_entries(cwd) if cancelled is None else _codex_db_entries(cwd, cancelled=cancelled)
+    )
+    _check_cancelled(cancelled)
     known = {entry.session_id for entry in entries}
-    return entries + [e for e in _jsonl_entries(_CODEX, cwd) if e.session_id not in known]
+    entries.extend(
+        entry
+        for entry in (
+            _jsonl_entries(_CODEX, cwd)
+            if cancelled is None
+            else _jsonl_entries(_CODEX, cwd, cancelled=cancelled)
+        )
+        if entry.session_id not in known
+    )
+    return entries
 
 
 def _codex_turns(
@@ -1186,7 +1367,9 @@ def _codex_turns(
 # ----- muse.ai -----
 
 
-def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _museai_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     """muse.ai's main chat and side chats, wherever they were started.
 
     They live on the agent's own machine and belong to no folder here, so they
@@ -1195,12 +1378,17 @@ def _museai_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     """
     # No muse-cli sign-in, no chats to ask for: don't start the CLI (and its
     # network round trip) for someone who never set muse.ai up.
+    _check_cancelled(cancelled)
     if not (_home() / ".config" / "muse-cli" / "config.json").is_file():
         return []
+    _check_cancelled(cancelled)
     from museai_backend import museai_chats
 
     entries: List[HistoryEntry] = []
-    for chat in museai_chats():
+    chats = museai_chats()
+    _check_cancelled(cancelled)
+    for chat in chats:
+        _check_cancelled(cancelled)
         try:
             stamp = time.mktime(time.strptime(str(chat.get("updated") or ""), "%Y-%m-%d %H:%M"))
         except (ValueError, OverflowError):
@@ -1241,7 +1429,7 @@ def _museai_turns(
 # ----- FreeBuff -----
 
 
-def _git_root_name(cwd: str) -> str:
+def _git_root_name(cwd: str, *, cancelled: Optional[Callable[[], bool]] = None) -> str:
     """The name FreeBuff files a directory's chats under.
 
     FreeBuff buckets a conversation by the *repository* it was started in, not
@@ -1253,21 +1441,43 @@ def _git_root_name(cwd: str) -> str:
     except (OSError, ValueError):
         return ""
     for candidate in (current, *current.parents):
+        _check_cancelled(cancelled)
         if (candidate / ".git").exists():
             return candidate.name
     return ""
 
 
-def _freebuff_chat_buckets(cwd: Optional[str]) -> List[Path]:
+def _freebuff_chat_buckets(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[Path]:
+    _check_cancelled(cancelled)
     root = _home() / ".config" / "manicode" / "projects"
     if cwd:
-        names = [name for name in (Path(cwd).name, _git_root_name(cwd)) if name]
+        names = [
+            name for name in (Path(cwd).name, _git_root_name(cwd, cancelled=cancelled)) if name
+        ]
         buckets = [root / name / "chats" for name in names]
         buckets.append(root / "chats")
-        return [path for path in buckets if path.is_dir()]
+        found = []
+        for path in buckets:
+            _check_cancelled(cancelled)
+            if path.is_dir():
+                found.append(path)
+        return found
     try:
-        return sorted(path for path in [root / "chats", *root.glob("*/chats")] if path.is_dir())
+        found = []
+        candidates = [root / "chats"]
+        for path in root.glob("*/chats"):
+            _check_cancelled(cancelled)
+            candidates.append(path)
+        for path in candidates:
+            _check_cancelled(cancelled)
+            if path.is_dir():
+                found.append(path)
+        found.sort()
+        return found
     except OSError:
+        _check_cancelled(cancelled)
         return []
 
 
@@ -1289,23 +1499,32 @@ def _freebuff_messages(chat: Path, *, cancelled: Optional[Callable[[], bool]] = 
     return messages
 
 
-def _freebuff_first_prompt(chat: Path) -> str:
+def _freebuff_first_prompt(chat: Path, *, cancelled: Optional[Callable[[], bool]] = None) -> str:
     """The chat's first typed message, from its metadata where possible.
 
     FreeBuff writes the first prompt into ``chat-meta.json`` itself, so the
     common case costs one small read instead of parsing the whole conversation.
     """
+    _check_cancelled(cancelled)
     try:
         meta = json.loads((chat / "chat-meta.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        _check_cancelled(cancelled)
         meta = {}
+    _check_cancelled(cancelled)
     if isinstance(meta, dict):
         first = str(meta.get("firstPrompt") or "").strip()
         if first:
             # FreeBuff's own preview is already elided; drop its ellipsis so the
             # title is not cut twice.
             return first[:-3].rstrip() if first.endswith("...") else first
-    for message in _freebuff_messages(chat):
+    messages = (
+        _freebuff_messages(chat)
+        if cancelled is None
+        else _freebuff_messages(chat, cancelled=cancelled)
+    )
+    for message in messages:
+        _check_cancelled(cancelled)
         if message.get("variant") == "user":
             text = str(message.get("content") or "").strip()
             if text:
@@ -1313,8 +1532,19 @@ def _freebuff_first_prompt(chat: Path) -> str:
     return ""
 
 
-def _freebuff_entry(chat: Path, bucket_folder: str) -> Optional[HistoryEntry]:
-    first = _freebuff_first_prompt(chat)
+def _freebuff_entry(
+    chat: Path,
+    bucket_folder: str,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> Optional[HistoryEntry]:
+    _check_cancelled(cancelled)
+    first = (
+        _freebuff_first_prompt(chat)
+        if cancelled is None
+        else _freebuff_first_prompt(chat, cancelled=cancelled)
+    )
+    _check_cancelled(cancelled)
     if not first:
         return None
     return HistoryEntry(
@@ -1328,30 +1558,49 @@ def _freebuff_entry(chat: Path, bucket_folder: str) -> Optional[HistoryEntry]:
     )
 
 
-def _freebuff_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _freebuff_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     entries: List[HistoryEntry] = []
     seen: set[str] = set()
-    for bucket in _freebuff_chat_buckets(cwd):
+    buckets = (
+        _freebuff_chat_buckets(cwd)
+        if cancelled is None
+        else _freebuff_chat_buckets(cwd, cancelled=cancelled)
+    )
+    for bucket in buckets:
+        _check_cancelled(cancelled)
         # ".../projects/<project>/chats" — the project is what to display.
         bucket_folder = bucket.parent.name if bucket.parent.name != "manicode" else ""
+        bucket_entries = []
+        bucket_seen = set(seen)
         try:
-            chats = list(bucket.iterdir())
+            for chat in bucket.iterdir():
+                _check_cancelled(cancelled)
+                if not chat.is_dir() or chat.name in bucket_seen:
+                    continue
+                entry = (
+                    _freebuff_entry(chat, bucket_folder)
+                    if cancelled is None
+                    else _freebuff_entry(chat, bucket_folder, cancelled=cancelled)
+                )
+                if entry is not None:
+                    bucket_seen.add(chat.name)
+                    bucket_entries.append(entry)
         except OSError:
+            _check_cancelled(cancelled)
             continue
-        for chat in chats:
-            if not chat.is_dir() or chat.name in seen:
-                continue
-            entry = _freebuff_entry(chat, bucket_folder)
-            if entry is not None:
-                seen.add(chat.name)
-                entries.append(entry)
+        seen = bucket_seen
+        entries.extend(bucket_entries)
     return entries
 
 
 _FREEBUFF_DESKTOP_DB = "desktop-v2.db"
 
 
-def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _freebuff_desktop_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
     """FreeBuff Desktop's threads: one SQLite store per project it has opened.
 
     The desktop app does not use the CLI's chat folders; each project gets
@@ -1360,18 +1609,36 @@ def _freebuff_desktop_entries(cwd: Optional[str]) -> List[HistoryEntry]:
     """
     root = _home() / ".config" / "freebuff-desktop" / "projects"
     entries: List[HistoryEntry] = []
-    for db in _globbed(root, f"*/{_FREEBUFF_DESKTOP_DB}"):
+    databases = (
+        _globbed(root, f"*/{_FREEBUFF_DESKTOP_DB}")
+        if cancelled is None
+        else _globbed(root, f"*/{_FREEBUFF_DESKTOP_DB}", cancelled=cancelled)
+    )
+    for db in databases:
+        _check_cancelled(cancelled)
         connection = _hermes_connect(db)
         if connection is None:
+            _check_cancelled(cancelled)
             continue
         try:
+            _check_cancelled(cancelled)
             # Older stores predate the archive columns, so read whole rows.
-            rows = connection.execute("SELECT * FROM threads").fetchall()
+            cursor = connection.execute("SELECT * FROM threads")
+            _check_cancelled(cancelled)
+            rows = []
+            for row in cursor:
+                _check_cancelled(cancelled)
+                rows.append(row)
+            _check_cancelled(cancelled)
+        except HistoryOpenCancelled:
+            raise
         except Exception:  # noqa: BLE001 - an older schema is not a crash
+            _check_cancelled(cancelled)
             rows = []
         finally:
             connection.close()
         for row in rows:
+            _check_cancelled(cancelled)
             keys = row.keys()
             if any(k in keys and row[k] for k in ("archived_at", "sidebar_archived_at")):
                 continue
@@ -1397,10 +1664,11 @@ def _freebuff_desktop_turns(
 ) -> List[HistoryTurn]:
     _check_cancelled(cancelled)
     connection = _hermes_connect(Path(entry.path))
-    _check_cancelled(cancelled)
     if connection is None:
+        _check_cancelled(cancelled)
         return []
     try:
+        _check_cancelled(cancelled)
         rows = connection.execute(
             "SELECT role, parts_json FROM messages WHERE thread_id = ? ORDER BY seq LIMIT ?",
             (entry.session_id, _MAX_TRANSCRIPT_PARTS),
@@ -1436,8 +1704,19 @@ def _freebuff_desktop_turns(
     return turns
 
 
-def _freebuff_all_entries(cwd: Optional[str]) -> List[HistoryEntry]:
-    return _freebuff_entries(cwd) + _freebuff_desktop_entries(cwd)
+def _freebuff_all_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
+    entries = (
+        _freebuff_entries(cwd) if cancelled is None else _freebuff_entries(cwd, cancelled=cancelled)
+    )
+    _check_cancelled(cancelled)
+    entries.extend(
+        _freebuff_desktop_entries(cwd)
+        if cancelled is None
+        else _freebuff_desktop_entries(cwd, cancelled=cancelled)
+    )
+    return entries
 
 
 def _freebuff_any_turns(
@@ -1524,7 +1803,12 @@ def _opencode_connect() -> Optional["sqlite3.Connection"]:
 _OPENCODE_UNTITLED = re.compile(r"^(?:new session\b|untitled\b)", re.IGNORECASE)
 
 
-def _opencode_first_prompt(connection: "sqlite3.Connection", session_id: str) -> str:
+def _opencode_first_prompt(
+    connection: "sqlite3.Connection",
+    session_id: str,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> str:
     """The first thing typed into a conversation, for titling it.
 
     Whose message a part belongs to is decided from the message record rather
@@ -1532,15 +1816,21 @@ def _opencode_first_prompt(connection: "sqlite3.Connection", session_id: str) ->
     substring, and reading it as one is what survives opencode reformatting
     what it writes.
     """
+    _check_cancelled(cancelled)
     try:
         rows = connection.execute(
             "SELECT m.data, p.data FROM part p JOIN message m ON m.id = p.message_id "
             "WHERE p.session_id = ? ORDER BY p.time_created LIMIT 20",
             (session_id,),
         ).fetchall()
+        _check_cancelled(cancelled)
+    except HistoryOpenCancelled:
+        raise
     except sqlite3.Error:
+        _check_cancelled(cancelled)
         return ""
     for message_data, part_data in rows:
+        _check_cancelled(cancelled)
         try:
             message = json.loads(message_data)
             part = json.loads(part_data)
@@ -1563,27 +1853,44 @@ _FIRST_PROMPT_CACHE: dict[str, str] = {}
 _FIRST_PROMPT_CACHE_AT: tuple[str, float] = ("", 0.0)
 
 
-def _opencode_first_prompt_cached(connection: "sqlite3.Connection", session_id: str) -> str:
+def _opencode_first_prompt_cached(
+    connection: "sqlite3.Connection",
+    session_id: str,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> str:
     """The first prompt, read once per session per database state."""
     global _FIRST_PROMPT_CACHE_AT
+    _check_cancelled(cancelled)
     db = _opencode_db()
     at = (str(db), _mtime(db))
+    _check_cancelled(cancelled)
     if at != _FIRST_PROMPT_CACHE_AT:
         _FIRST_PROMPT_CACHE.clear()
         _FIRST_PROMPT_CACHE_AT = at
     if session_id in _FIRST_PROMPT_CACHE:
         return _FIRST_PROMPT_CACHE[session_id]
-    text = _opencode_first_prompt(connection, session_id)
+    text = (
+        _opencode_first_prompt(connection, session_id)
+        if cancelled is None
+        else _opencode_first_prompt(connection, session_id, cancelled=cancelled)
+    )
+    _check_cancelled(cancelled)
     _FIRST_PROMPT_CACHE[session_id] = text
     return text
 
 
-def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
+def _opencode_entries(
+    cwd: Optional[str], *, cancelled: Optional[Callable[[], bool]] = None
+) -> List[HistoryEntry]:
+    _check_cancelled(cancelled)
     connection = _opencode_connect()
     if connection is None:
+        _check_cancelled(cancelled)
         return []
     entries: List[HistoryEntry] = []
     try:
+        _check_cancelled(cancelled)
         # Subagents get sessions of their own, hung off the one that started
         # them. Only the conversations a person actually had belong in the
         # picker, which is what a null parent means here.
@@ -1593,12 +1900,15 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
         # *scanned*, and the conversations for one directory can sit anywhere
         # in a database shared by every directory — so asking for the newest
         # few hundred rows would quietly hide older ones from this project.
+        _check_cancelled(cancelled)
         rows = connection.execute(
             "SELECT id, title, directory, time_updated FROM session "
             "WHERE parent_id IS NULL AND time_archived IS NULL "
             "ORDER BY time_updated DESC"
         )
+        _check_cancelled(cancelled)
         for session_id, title, directory, updated in rows:
+            _check_cancelled(cancelled)
             if len(entries) >= _MAX_HISTORY_ENTRIES:
                 break
             directory = str(directory or "")
@@ -1606,7 +1916,13 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
                 continue
             title = str(title or "").strip()
             if not title or _OPENCODE_UNTITLED.match(title):
-                title = _opencode_first_prompt_cached(connection, str(session_id))
+                title = (
+                    _opencode_first_prompt_cached(connection, str(session_id))
+                    if cancelled is None
+                    else _opencode_first_prompt_cached(
+                        connection, str(session_id), cancelled=cancelled
+                    )
+                )
             if not title:
                 continue
             try:
@@ -1627,7 +1943,10 @@ def _opencode_entries(cwd: Optional[str]) -> List[HistoryEntry]:
                     folder=_folder_name(directory),
                 )
             )
+    except HistoryOpenCancelled:
+        raise
     except sqlite3.Error:
+        _check_cancelled(cancelled)
         return entries
     finally:
         connection.close()
@@ -1639,11 +1958,12 @@ def _opencode_turns(
 ) -> List[HistoryTurn]:
     _check_cancelled(cancelled)
     connection = _opencode_connect()
-    _check_cancelled(cancelled)
     if connection is None:
+        _check_cancelled(cancelled)
         return []
     turns: List[HistoryTurn] = []
     try:
+        _check_cancelled(cancelled)
         roles = {}
         for message_id, data in connection.execute(
             "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created",
@@ -1716,7 +2036,7 @@ def _opencode_turns(
 
 # ----- Public API -----
 
-_LISTERS: dict[str, Callable[[Optional[str]], List[HistoryEntry]]] = {
+_LISTERS: dict[str, Callable[..., List[HistoryEntry]]] = {
     BACKEND_CLAUDE: _claude_entries,
     BACKEND_CODEX: _codex_entries,
     BACKEND_FREEBUFF: _freebuff_all_entries,
@@ -1748,6 +2068,8 @@ def list_history(
     backend: Optional[str] = None,
     cwd: Optional[str] = None,
     limit: int = 300,
+    *,
+    cancelled: Optional[Callable[[], bool]] = None,
 ) -> List[HistoryEntry]:
     """Past conversations, newest first.
 
@@ -1756,6 +2078,7 @@ def list_history(
     returns every directory. ``limit`` caps how many are returned, after
     sorting, so a machine with years of history still opens the picker fast.
     """
+    _check_cancelled(cancelled)
     if backend is None:
         backends = list(BACKEND_IDS)
     else:
@@ -1763,11 +2086,17 @@ def list_history(
 
     entries: List[HistoryEntry] = []
 
-    def load(lister: Callable[[Optional[str]], List[HistoryEntry]]) -> List[HistoryEntry]:
+    def load(lister: Callable[..., List[HistoryEntry]]) -> List[HistoryEntry]:
+        _check_cancelled(cancelled)
         try:
-            return lister(cwd)
+            entries = lister(cwd) if cancelled is None else lister(cwd, cancelled=cancelled)
+        except HistoryOpenCancelled:
+            raise
         except OSError:
+            _check_cancelled(cancelled)
             return []
+        _check_cancelled(cancelled)
+        return entries
 
     listers = [_LISTERS[name] for name in backends if name in _LISTERS]
     if len(listers) == 1:
@@ -1775,8 +2104,11 @@ def list_history(
     elif listers:
         with ThreadPoolExecutor(max_workers=min(4, len(listers))) as executor:
             for result in executor.map(load, listers):
+                _check_cancelled(cancelled)
                 entries.extend(result)
+    _check_cancelled(cancelled)
     entries.sort(key=lambda entry: entry.modified, reverse=True)
+    _check_cancelled(cancelled)
     return entries[: max(0, limit)]
 
 

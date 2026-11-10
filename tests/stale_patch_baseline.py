@@ -84,7 +84,6 @@ BASELINE: set[tuple[str, str, str]] = {
     ("test_hermes_sessions_ui.py", "blindpilot_app", "hermes_session_catalog"),
     ("test_hidden_login_terminal.py", "process_utils", "end_process_group"),
     ("test_history_dialog_builds.py", "blindpilot_app", "list_history"),
-    ("test_history_loading.py", "blindpilot_app", "list_history"),
     ("test_history_resume_async.py", "blindpilot_app", "prepare_history_open"),
     ("test_last_exchange_and_limits.py", "blindpilot_app", "list_history"),
     ("test_live_rows.py", "blindpilot_app", "parse_response"),
