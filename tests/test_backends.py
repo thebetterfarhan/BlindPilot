@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends
+import opencode_worker
 import codex_worker
 import freebuff_terminal
 import freebuff_worker
@@ -1241,11 +1242,11 @@ def _opencode_event(kind: str, session_id: str = "ses_test", **properties) -> di
 def _opencode_turn(events: list[dict], monkeypatch, **kwargs) -> tuple[dict, object]:
     """Run one OpencodeWorker turn against a scripted server."""
     server = _ScriptedOpencodeServer(events)
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     known = kwargs.pop("commands", [])
-    monkeypatch.setattr(agent_backends, "opencode_commands", lambda *_a, **_k: known)
+    monkeypatch.setattr(opencode_worker, "opencode_commands", lambda *_a, **_k: known)
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1281,7 +1282,7 @@ def test_opencode_worker_is_the_adapter_for_opencode():
 def test_opencode_event_handler_does_not_collide_with_python_313_thread_handle(monkeypatch):
     """Python 3.13 stores an internal object on every Thread as ``_handle``."""
     server = _ScriptedOpencodeServer([_opencode_event("session.idle")])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     callbacks = _callbacks()
     completed: list[str] = []
     callbacks["on_complete"] = completed.append
@@ -1463,8 +1464,8 @@ def test_opencode_says_so_when_it_cannot_answer_a_permission_request(monkeypatch
     ]
     server = _ScriptedOpencodeServer(events)
     server.fail = {"/permissions/", "/permission/"}
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     activity: list[tuple[str, str]] = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: activity.append((kind, value))
@@ -1544,9 +1545,9 @@ def test_opencode_refused_history_after_a_question_is_repaired_and_resent(monkey
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1590,9 +1591,9 @@ def test_opencode_refused_history_without_a_question_is_only_reported(monkeypatc
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
 
     seen, server2 = _opencode_turn(events, monkeypatch, session_id="ses_test")
 
@@ -1617,9 +1618,9 @@ def test_opencode_a_second_refusal_is_reported_not_looped(monkeypatch):
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1652,9 +1653,9 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1676,7 +1677,7 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
 
 def test_opencode_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     events = [_opencode_event("session.compacted")]
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
 
     seen, server = _opencode_turn(
         events,
@@ -1715,7 +1716,7 @@ def test_opencode_sends_a_model_only_when_a_tab_chose_one(monkeypatch):
 
 def test_opencode_steering_adds_to_the_turn_already_running(monkeypatch):
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
     worker._server = server
     worker._session_id = "ses_test"
@@ -1780,7 +1781,7 @@ def test_opencode_steering_leaves_the_turns_attachments_behind(monkeypatch, tmp_
     picture = tmp_path / "shot.png"
     picture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     worker = OpencodeWorker(
         "hello", "ses_test", "/work", "default", attachments=(str(picture),), **_callbacks()
     )
@@ -1795,7 +1796,7 @@ def test_opencode_steering_leaves_the_turns_attachments_behind(monkeypatch, tmp_
 
 
 def test_opencode_file_parts_are_sniffed_capped_and_named(tmp_path):
-    from agent_backends import _opencode_file_part
+    from opencode_worker import _opencode_file_part
 
     picture = tmp_path / "shot.png"
     picture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
@@ -1879,7 +1880,7 @@ def test_opencode_says_patches_subtasks_and_files_once_each(monkeypatch):
 
 def test_opencode_stop_interrupts_the_turn_and_releases_the_reader(monkeypatch):
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
     worker._server = server
     worker._stream = server.open("GET", "/event")
@@ -1905,7 +1906,7 @@ def test_opencode_catalog_names_models_by_provider_and_pools_their_efforts(monke
         "default": {"opencode-go": "kimi-k3"},
         "model": "",
     }
-    monkeypatch.setattr(agent_backends, "_opencode_catalog", lambda *_a, **_k: catalog)
+    monkeypatch.setattr(opencode_worker, "_opencode_catalog", lambda *_a, **_k: catalog)
 
     models, efforts, current, effort, error = agent_backends.opencode_model_options("/work")
 
@@ -1919,10 +1920,10 @@ def test_opencode_catalog_names_models_by_provider_and_pools_their_efforts(monke
 
 
 def test_opencode_never_sends_an_effort_the_chosen_model_does_not_offer(monkeypatch):
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: ["max"])
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: ["max"])
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     server = _ScriptedOpencodeServer([_opencode_event("session.idle")])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
 
     OpencodeWorker(
         "hi", None, "/work", "default", model="p/m", effort="low", **_callbacks()
@@ -1952,7 +1953,7 @@ def test_opencode_server_is_reached_over_loopback_behind_a_password(monkeypatch)
         return FakeProcess()
 
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(agent_backends, "_free_port", lambda: 41234)
+    monkeypatch.setattr(opencode_worker, "_free_port", lambda: 41234)
     monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
@@ -1986,7 +1987,7 @@ def test_a_port_taken_before_the_child_binds_is_retried_on_a_fresh_one(monkeypat
 
     ports = iter([41234, 41235])
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(agent_backends, "_free_port", lambda: next(ports))
+    monkeypatch.setattr(opencode_worker, "_free_port", lambda: next(ports))
     monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
@@ -2005,7 +2006,7 @@ def test_opencode_prefers_its_own_executable_over_the_npm_wrapper(monkeypatch, t
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
 
     # Terminating a .cmd launcher leaves the server it started holding the port.
-    assert agent_backends._opencode_server_binary(str(wrapper)) == str(native)
+    assert opencode_worker._opencode_server_binary(str(wrapper)) == str(native)
 
 
 def test_opencode_compaction_is_offered_and_freebuffs_is_not():
@@ -2054,12 +2055,12 @@ def test_opencode_reports_a_command_that_will_not_run_exactly_once(monkeypatch):
     """Its command request answers only when the turn ends, so a failure can be
     noticed from either thread — and the user should hear about it once."""
     monkeypatch.setattr(
-        agent_backends, "opencode_commands", lambda *_a, **_k: [("init", "guided setup")]
+        opencode_worker, "opencode_commands", lambda *_a, **_k: [("init", "guided setup")]
     )
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     server = _ScriptedOpencodeServer([])
     server.fail = {"/command"}
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
@@ -2203,7 +2204,7 @@ def test_opencode_question_nobody_answered_is_rejected_not_left_open():
 
 
 def test_opencode_multiple_flag_is_what_makes_a_question_multi_select():
-    (single, several) = agent_backends._opencode_questions(
+    (single, several) = opencode_worker._opencode_questions(
         [
             {"question": "One?", "options": [{"label": "A"}]},
             {"question": "Many?", "multiple": True, "options": [{"label": "B"}]},
