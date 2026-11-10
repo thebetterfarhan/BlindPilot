@@ -13699,6 +13699,7 @@ class MainFrame(wx.Frame):
         # window is shown (`watch_for_links`), never in a window built and torn
         # down by a check, where a timer firing mid-teardown crashed macOS.
         self._links_timer: Optional[wx.Timer] = None
+        self._links_loading = False
         # Re-reads every tab's model catalog on a timer, so a model retired
         # upstream drops out of the picker on a window left open. Watched only
         # once the window is shown, like the links timer above.
@@ -16975,8 +16976,27 @@ class MainFrame(wx.Frame):
 
     # ----- Cleanup -----
     def _take_links(self) -> None:
-        """Open each session link a second copy left in the links folder."""
-        for link in take_handed_links():
+        """Collect handed-over links without scanning files on the GUI thread."""
+        if not self or self._links_loading:
+            return
+        self._links_loading = True
+
+        def work() -> None:
+            try:
+                links = take_handed_links()
+            except Exception:  # noqa: BLE001 - a failed poll must not disable later checks
+                links = []
+            _call_after_alive(self._handed_links_loaded, links)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _handed_links_loaded(self, links: list[str]) -> None:
+        if not self:
+            return
+        self._links_loading = False
+        for link in links:
+            if not self:
+                return
             self.open_session_link(link)
 
     def open_session_link(self, link: str) -> None:
@@ -17169,9 +17189,10 @@ def take_handed_links() -> list[str]:
     links = []
     for path in files:
         try:
-            text = path.read_text(encoding="utf-8")[:2000]
+            with path.open(encoding="utf-8") as handle:
+                text = handle.read(2000)
             path.unlink()
-        except OSError:
+        except (OSError, UnicodeError):
             continue
         links.append(text.strip())
     return links
