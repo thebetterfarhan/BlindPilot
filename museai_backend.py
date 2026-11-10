@@ -512,10 +512,6 @@ def museai_chat_snapshot(session_id: str, limit: int = 300) -> tuple[list[tuple[
     return [(prompt, "\n\n".join(said)) for prompt, said in turns], sequence
 
 
-def museai_chat_turns(session_id: str, limit: int = 300) -> list[tuple[str, str]]:
-    return museai_chat_snapshot(session_id, limit)[0]
-
-
 def museai_latest_seq(session_id: str) -> int:
     """The newest agent event in a chat, text or not; 0 if it cannot be read.
 
