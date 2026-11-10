@@ -1123,6 +1123,9 @@ class StdioTransport:
         self._frames_ready = threading.Condition(self._frames_lock)
         self._stderr: list[str] = []
         self._closed = False
+        # Set only by close(): unlike _closed it is not also set when the child's
+        # output simply ends, because frames sent before an exit must still be read.
+        self._released = False
         # cancel() and steer() write from the GUI thread while the worker may
         # be mid-write of a large frame; two text writers would interleave.
         self._send_lock = threading.Lock()
@@ -1215,6 +1218,8 @@ class StdioTransport:
                 self._stderr.append(line[:400])
                 continue
             with self._frames_ready:
+                if self._released:
+                    return
                 self._frames.append(frame)
                 self._frames_ready.notify_all()
         with self._frames_ready:
@@ -1292,6 +1297,10 @@ class StdioTransport:
         self._proc = None
         with self._frames_ready:
             self._closed = True
+            # A closed connection yields nothing: drop what had already arrived,
+            # and the reader drops anything it reads from here on.
+            self._released = True
+            self._frames.clear()
             self._frames_ready.notify_all()
 
     def connected(self) -> bool:
