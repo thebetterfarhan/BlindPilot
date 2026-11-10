@@ -20,6 +20,7 @@ import time
 from typing import Callable, Optional, Sequence
 
 from agent_backends import (
+    BACKEND_HERMES,
     SUBAGENT_COMPLETED,
     SUBAGENT_RUNNING,
     TurnCallbacks,
@@ -512,7 +513,7 @@ class HermesWorker(JsonRpcCalls, _TurnWorker):
     whichever one the user picked without knowing which it is.
     """
 
-    from agent_backends import BACKEND_HERMES as _backend  # type: ignore[misc]
+    _backend = BACKEND_HERMES
 
     def __init__(
         self,
@@ -711,10 +712,15 @@ class HermesWorker(JsonRpcCalls, _TurnWorker):
             transport.close()
 
     def _fail(self, message: str) -> None:
-        """Report a turn failure, once; Hermes uses _ended/_clean_end, not _settled."""
+        """Report a turn failure, once.
+
+        HermesWorker tracks once-ness through ``_ended``/``_clean_end``; keep
+        ``_settled`` in sync so any future base-class check sees the right state.
+        """
         if self._clean_end or self._ended:
             return
         self._ended = True
+        self._settled.set()
         self._on_failed(message)
 
     def _teardown(self) -> None:

@@ -10284,6 +10284,8 @@ class SessionPanel(wx.Panel):
                 on_done=lambda: self._queue_worker_event("done"),
                 on_question=self._ask_questions,
                 on_subagent=lambda *report: self._queue_worker_event("subagent", *report),
+                # resume_only turns replay the transcript; no approval prompt can
+                # arrive while the worker is replaying, so on_permission is None.
             ),
             **extra,
         )

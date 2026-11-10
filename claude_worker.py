@@ -242,18 +242,6 @@ class ClaudeWorker(_TurnWorker):
         """Where a turn that ended badly leaves its account of itself."""
         return diagnostics.log_path()
 
-    def _fail(self, message: str) -> None:
-        """Report why the turn ended, once — without the base class's generic log.
-
-        ClaudeWorker does its own detailed diagnostics via `_log_unfinished_turn`
-        (exit code, stderr text) before calling `_fail`, so the base class's
-        generic entry would duplicate that record.
-        """
-        if self._settled.is_set():
-            return
-        self._settled.set()
-        self._on_failed(message)
-
     def _log_unfinished_turn(self, rc: object, complete: bool, stderr_text: str) -> None:
         """Record a turn the CLI did not finish.
 

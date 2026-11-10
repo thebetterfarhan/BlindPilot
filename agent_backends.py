@@ -2758,7 +2758,7 @@ def _copilot_account_lines() -> list[str]:
     return copilot_account_lines()
 
 
-def _claude_worker(claude_worker: AgentWorkerFactory) -> AgentWorkerFactory:
+def _claude_worker(_claude: AgentWorkerFactory) -> AgentWorkerFactory:
     from claude_backend import ClaudeWorker
 
     return ClaudeWorker
