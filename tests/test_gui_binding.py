@@ -269,7 +269,10 @@ def test_callback_exception_does_not_leak_timing_state(wx_app, monkeypatch):
     assert app.over_budget_work() == []
 
 
-def test_real_dialog_delivers_modal_lifecycle(wx_app):
+def test_real_dialog_delivers_modal_lifecycle(wx_app, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(app.time, "perf_counter", lambda: now[0])
+
     class CountingHook(app._GuiModalHook):
         def __init__(self):
             super().__init__()
@@ -278,7 +281,9 @@ def test_real_dialog_delivers_modal_lifecycle(wx_app):
 
         def Enter(self, dialog):
             self.entered += 1
-            return super().Enter(dialog)
+            result = super().Enter(dialog)
+            now[0] += 10
+            return result
 
         def Exit(self, dialog):
             self.exited += 1
@@ -300,16 +305,28 @@ def test_real_dialog_delivers_modal_lifecycle(wx_app):
         hook.Unregister()
 
 
-def test_modal_hook_scope_can_be_reused_after_exception(wx_app):
+def test_modal_hook_scope_can_be_reused_after_exception(wx_app, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(app.time, "perf_counter", lambda: now[0])
     with pytest.raises(ValueError, match="original"):
         with app._gui_modal_tracking():
             raise ValueError("original")
-    with app._gui_modal_tracking():
+    with app._gui_modal_tracking() as hook:
         dialog = wx.Dialog(None)
         try:
-            wx.CallLater(80, dialog.EndModal, wx.ID_OK)
+
+            def finish():
+                now[0] += 0.06
+                dialog.EndModal(wx.ID_OK)
+
+            wx.CallLater(80, finish)
             app._over_budget_work.clear()
             app._gui_work("dialog", lambda: wx.Dialog.ShowModal(dialog))()
-            assert app.over_budget_work() == []
+            # Native dialog transitions vary by platform; test hook accounting.
+            assert app.over_budget_work() == [
+                (f"CallLater: {finish.__qualname__}", pytest.approx(60))
+            ]
+            assert hook.snapshots == []
+            assert app._gui_timing_frames == []
         finally:
             dialog.Destroy()
