@@ -1,6 +1,6 @@
 # ADR 0001: GUI-thread budget and shutdown ownership
 
-- **Status:** Accepted
+- **Status:** Accepted; shutdown deadline amended by [ADR 0005](0005-bounded-shutdown.md)
 - **Date:** 2026-11-04
 - **Context:** Menu and shortcut work can stall painting, keyboard input, and
   screen-reader updates. Quitting must close the window promptly while still

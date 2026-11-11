@@ -40,6 +40,18 @@ _Avoid_: daemon, pool entry, session process, background process.
 Releasing a held process: ending it and its children, and forgetting it.
 _Avoid_: Stop, kill, reap, cancel, terminate
 
+**Shutdown**:
+The background work that runs after the main window is gone: cancelling tabs, then dropping every held process. It is bounded by a cap.
+_Avoid_: Teardown, cleanup, exit handling.
+
+**Owned process**:
+A backend root BlindPilot launched itself and can still verify as its own, by Job Object on Windows or by session leadership on POSIX. Only owned processes are ever dropped by force.
+_Avoid_: Child process, our process, backend PID.
+
+**Forced drop**:
+A drop made after the shutdown cap is reached, by ending owned roots instead of waiting for them. Still a drop, only late.
+_Avoid_: Kill, force-kill, abort.
+
 ## Accounts
 
 **Account**:
