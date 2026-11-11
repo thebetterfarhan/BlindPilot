@@ -1165,6 +1165,14 @@ class CodexServer:
         finally:
             self.forget_turn(turn_id)
 
+    def force_stop(self) -> None:
+        """End the exact root now, for a shutdown whose stop ran out of time.
+
+        Takes no lock and closes no pipe, so it cannot hang behind a stuck
+        ``stop``. Harmless after ``stop`` and when called twice.
+        """
+        process_utils.end_process_group(self.proc, timeout=process_utils.FORCE_STOP_WAIT)
+
     def stop(self) -> None:
         try:
             process_utils.end_process_group(self.proc, timeout=2)
@@ -1286,6 +1294,7 @@ def codex_adapter() -> backend_pool.Adapter:
         interrupt=lambda _server, _timeout: False,
         stop=stop,
         busy=busy,
+        force_stop=lambda server: cast(CodexServer, server).force_stop(),
     )
 
 

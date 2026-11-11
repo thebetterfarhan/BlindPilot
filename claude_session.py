@@ -33,6 +33,7 @@ from agent_backends import (
     subprocess_env,
 )
 from process_utils import (
+    FORCE_STOP_WAIT,
     end_process_group,
     own_group_kwargs,
 )
@@ -556,6 +557,15 @@ class ClaudeSession:
             except (OSError, ValueError):
                 pass
 
+    def force_stop(self) -> None:
+        """End the exact root now, for a shutdown whose stop ran out of time.
+
+        Does not wait on locks or close pipes, so it cannot hang behind a
+        stuck ``stop``. Harmless after ``stop`` and when called twice: an
+        exited root is never signalled by process or group ID.
+        """
+        end_process_group(self._proc, timeout=FORCE_STOP_WAIT)
+
     # ----- stderr -----
     def _drain_stderr(self) -> None:
         stream = self._proc.stderr
@@ -594,6 +604,7 @@ def claude_adapter() -> backend_pool.Adapter:
         interrupt=lambda session, timeout: cast(ClaudeSession, session).interrupt(timeout),
         stop=lambda session: cast(ClaudeSession, session).stop(),
         busy=lambda session: cast(ClaudeSession, session).busy(),
+        force_stop=lambda session: cast(ClaudeSession, session).force_stop(),
     )
 
 

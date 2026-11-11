@@ -42,11 +42,18 @@ def own_group_kwargs() -> dict:
     return {} if platform.system() == "Windows" else {"start_new_session": True}
 
 
+# What a forced drop at shutdown waits for a killed root, inside the two second
+# force budget. The kill signals have already gone out when the wait starts.
+FORCE_STOP_WAIT = 1.0
+
+
 def end_process_group(proc: object, timeout: float = 0.0) -> None:
     """Stop a child started with :func:`own_group_kwargs`, and its own children.
 
     The kill signals go out immediately; the wait for the child to be gone is
-    bounded by *timeout*, or five seconds when it is not given. Stop Task and a
+    bounded by *timeout*, or five seconds when it is zero or not given (the
+    default is ``0.0``, and ``timeout or 5`` turns it into five seconds, so a
+    caller on a short budget must pass a positive timeout). Stop Task and a
     closing wizard both call this from the window's own thread, so an unbounded
     wait there is a frozen application -- but no wait at all leaves a zombie on
     POSIX and an unreleased handle on Windows, which is why the default path
