@@ -15,9 +15,9 @@ import time
 
 import pytest
 
-import agent_backends as ab
-import process_utils
 import blindpilot_app as app
+import freebuff_terminal as ab
+import process_utils
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="Windows uses a console, not a pty")

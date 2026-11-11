@@ -12,6 +12,7 @@ compiled into the app would be wrong the first time a skill was added.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 from hermes_worker import HermesWorker
 
@@ -60,12 +61,14 @@ def _worker(prompt, replies, *, attachments=None):
         "C:/Users/admin",
         "default",
         attachments=attachments,
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: state["activity"].append((kind, text)),
-        on_complete=lambda text: state["complete"].append(text),
-        on_failed=lambda msg: state["failed"].append(msg),
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: state["activity"].append((kind, text)),
+            on_complete=lambda text: state["complete"].append(text),
+            on_failed=lambda msg: state["failed"].append(msg),
+            on_done=lambda: None,
+        ),
     )
     transport = _ScriptedTransport(replies)
     worker._transport = transport

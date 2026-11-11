@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 
-import agent_backends
+import backend_probes
 import blindpilot_app
 import museai_backend
 import markdown_rows
@@ -28,7 +28,7 @@ def _wait(predicate, timeout=3):
 
 def test_python_cli_probes_can_print_unicode_chat_history(monkeypatch):
     monkeypatch.setenv("PYTHONIOENCODING", "ascii")
-    code, text = agent_backends._probe_backend(sys.executable, ["-c", "print('\u2192')"], 10)
+    code, text = backend_probes._probe_backend(sys.executable, ["-c", "print('\u2192')"], 10)
     assert (code, text.strip()) == (0, "\u2192")
 
 
@@ -83,8 +83,8 @@ def _gateway(monkeypatch, tmp_path):
             )
         raise AssertionError(f"Unexpected muse-cli command: {args}")
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "muse-cli")
-    monkeypatch.setattr(agent_backends, "_probe_backend", probe)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "muse-cli")
+    monkeypatch.setattr(backend_probes, "_probe_backend", probe)
     return chats, calls
 
 

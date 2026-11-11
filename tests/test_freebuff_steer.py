@@ -16,9 +16,11 @@ or not the turn was steered.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_terminal
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 READY = "Describe your task"
 # A turn in progress, before and after a steer, and the same turn finished: the
@@ -60,12 +62,14 @@ def _run(monkeypatch, steer: str) -> _Turn:
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
     state = {"sent": False, "steered": False, "phase": 0}
 
@@ -85,7 +89,7 @@ def _run(monkeypatch, steer: str) -> _Turn:
             if not state["steered"]:
                 state["steered"] = True
                 # Replay the echo a legacy FreeBuff terminal would have drawn.
-                worker._echoes.append(agent_backends._freebuff_echo(steer))
+                worker._echoes.append(freebuff_worker._freebuff_echo(steer))
                 worker._submit_text(steer)
             painted = AFTER if state["phase"] <= 5 else DONE
             return _frame(painted.format(steer=steer))
@@ -93,14 +97,14 @@ def _run(monkeypatch, steer: str) -> _Turn:
         return read
 
     worker._write = write
-    monkeypatch.setattr(agent_backends, "_freebuff_prewarm", None)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_prewarm", None)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     # The fake terminal is already booted; the hold itself is covered in
     # test_freebuff_session_drop.py.
-    monkeypatch.setattr(agent_backends, "_freebuff_boot_ready", lambda *_a: True)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_boot_ready", lambda *_a: True)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
 
     worker._do_run()
@@ -178,14 +182,16 @@ def _sections(prompt: str, steer: str, screen: str):
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _kind, _text: None,
-        on_complete=lambda _text: None,
-        on_failed=lambda _text: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _kind, _text: None,
+            on_complete=lambda _text: None,
+            on_failed=lambda _text: None,
+            on_done=lambda: None,
+        ),
     )
-    worker._echoes.append(agent_backends._freebuff_echo(steer))
+    worker._echoes.append(freebuff_worker._freebuff_echo(steer))
     return worker._freebuff_sections(screen)
 
 

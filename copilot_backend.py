@@ -52,7 +52,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-import agent_backends
+import backend_probes
 from owned_process import owned_popen
 from agent_backends import (
     BACKEND_COPILOT,
@@ -125,7 +125,7 @@ def _gh_signed_in(timeout: int) -> bool:
     gh = shutil.which("gh")
     if not gh:
         return False
-    code, _text = agent_backends._probe_backend(gh, ["auth", "status"], timeout)
+    code, _text = backend_probes._probe_backend(gh, ["auth", "status"], timeout)
     return code == 0
 
 

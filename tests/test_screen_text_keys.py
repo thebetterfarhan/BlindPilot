@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_backends import _keyed, _unspoken_tail
+from freebuff_terminal import _keyed, _unspoken_tail
 
 # Each folds to more characters than it occupies.
 GERMAN = "Stra\u00dfe"  # Straße  -> strasse

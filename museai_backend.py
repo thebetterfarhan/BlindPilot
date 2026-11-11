@@ -16,8 +16,8 @@ the agent's reply (measured at 0.3.2). The turn itself is in
 The agent runs somewhere else, so it cannot read files on this machine: the
 working folder means nothing to it, and attachments are not passed.
 
-CLI probes go through ``agent_backends._probe_backend`` and binary discovery
-through ``agent_backends.find_backend_cli``, resolved at call time, so the
+CLI probes go through ``backend_probes._probe_backend`` and binary discovery
+through ``backend_probes.find_backend_cli``, resolved at call time, so the
 suite's "every backend" tests fence this adapter off the way they fence the
 others.
 
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, urlsplit
 
-import agent_backends
+import backend_probes
 from agent_backends import BACKEND_MUSEAI
 
 
@@ -55,10 +55,10 @@ def _json_from(text: str) -> object:
 
 def museai_status(timeout: int = 20) -> Optional[dict]:
     """``muse-cli status`` as a dict, or None when it is missing or signed out."""
-    binary = agent_backends.find_backend_cli(BACKEND_MUSEAI)
+    binary = backend_probes.find_backend_cli(BACKEND_MUSEAI)
     if not binary:
         return None
-    code, text = agent_backends._probe_backend(binary, ["status"], timeout)
+    code, text = backend_probes._probe_backend(binary, ["status"], timeout)
     payload = _json_from(text) if code == 0 else None
     return payload if isinstance(payload, dict) else None
 
@@ -84,10 +84,10 @@ def museai_account_lines() -> list[str]:
 
 
 def _cli_json(args: list[str], timeout: int = 60) -> object:
-    binary = agent_backends.find_backend_cli(BACKEND_MUSEAI)
+    binary = backend_probes.find_backend_cli(BACKEND_MUSEAI)
     if not binary:
         return None
-    code, text = agent_backends._probe_backend(binary, args, timeout)
+    code, text = backend_probes._probe_backend(binary, args, timeout)
     if code != 0:
         return None
     start = min((i for i in (text.find("["), text.find("{")) if i != -1), default=-1)
@@ -510,10 +510,6 @@ def museai_chat_snapshot(session_id: str, limit: int = 300) -> tuple[list[tuple[
                 turns.append(("", []))
             turns[-1][1].append(text)
     return [(prompt, "\n\n".join(said)) for prompt, said in turns], sequence
-
-
-def museai_chat_turns(session_id: str, limit: int = 300) -> list[tuple[str, str]]:
-    return museai_chat_snapshot(session_id, limit)[0]
 
 
 def museai_latest_seq(session_id: str) -> int:

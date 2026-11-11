@@ -1,6 +1,7 @@
 """Backend-neutral behavior and provider adapter regression tests."""
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import io
 import json
@@ -13,7 +14,11 @@ from types import SimpleNamespace
 import pytest
 
 import agent_backends
+import backend_probes
+import opencode_worker
 import codex_worker
+import freebuff_terminal
+import freebuff_worker
 import process_utils
 import questions
 from agent_backends import (
@@ -22,7 +27,6 @@ from agent_backends import (
     BACKEND_FREEBUFF,
     BACKEND_OPENCODE,
     CodexWorker,
-    FreebuffWorker,
     OpencodeWorker,
     backend_auth_ok,
     backend_label,
@@ -33,6 +37,7 @@ from agent_backends import (
     set_freebuff_model,
     worker_class,
 )
+from freebuff_worker import FreebuffWorker
 
 
 @pytest.fixture
@@ -69,7 +74,7 @@ def test_backend_names_are_normalized_and_claude_is_the_fallback():
 def test_freebuff_auth_requires_a_complete_parseable_credential(monkeypatch, tmp_path, fake_home):
     credential = tmp_path / ".config" / "manicode" / "credentials.json"
     credential.parent.mkdir(parents=True)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
 
     credential.write_text("not json", encoding="utf-8")
     assert not backend_auth_ok(BACKEND_FREEBUFF)
@@ -126,7 +131,7 @@ def test_codex_catalog_includes_all_reported_reasoning_levels(monkeypatch, tmp_p
             }
         ]
     }
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(
         agent_backends.subprocess,
@@ -202,7 +207,7 @@ def test_codex_offers_only_the_models_the_service_still_lists(monkeypatch, tmp_p
         ]
     }
     run, calls = _codex_models_run({(): live, ("--bundled",): bundled})
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
@@ -222,7 +227,7 @@ def test_codex_falls_back_to_the_installed_copy_when_the_service_is_unreachable(
 ):
     bundled = {"models": [{"slug": "gpt-6-sol", "visibility": "list"}]}
     run, calls = _codex_models_run({("--bundled",): bundled})
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "run", run)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing"))
@@ -323,7 +328,7 @@ def test_codex_stream_deltas_become_one_accessible_activity_row():
     events = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: events.append((kind, value))
-    worker = CodexWorker("test", None, ".", "default", **callbacks)
+    worker = CodexWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
     worker._assistant_delta_seen.add("message-1")
     worker._assistant_streams["message-1"] = ["Blind", "Pilot", " ready."]
     worker._assistant_parts.extend(["Blind", "Pilot", " ready."])
@@ -354,7 +359,7 @@ def test_freebuff_catalog_is_discovered_at_runtime_and_preferred_is_default(
     # BlindPilot's own config lives under APPDATA on Windows, and selecting a
     # model writes there, so it has to be redirected as well as the home path.
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -391,7 +396,7 @@ def test_freebuff_catalog_keeps_the_current_off_peak_preferred_model(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -428,7 +433,7 @@ def test_freebuff_catalog_keeps_a_model_the_readme_names_without_its_date(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     models, current, error = freebuff_model_options()
@@ -460,7 +465,7 @@ def test_freebuff_falls_back_to_preferred_rather_than_freebuffs_own_setting(
     settings.write_text(json.dumps({"freebuffModel": "deepseek/deepseek-v4-flash"}), "utf-8")
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     _models, current, _error = freebuff_model_options()
@@ -494,7 +499,7 @@ def test_freebuff_screen_parser_returns_reasoning_and_clean_answer():
         None,
         ".",
         "default",
-        **_callbacks(),
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     screen = """
 Reply with exactly: BlindPilot FreeBuff adapter ready.
@@ -530,7 +535,7 @@ def test_freebuff_reads_the_answer_as_the_terminal_paints_it():
     events = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: events.append((kind, value))
-    worker = FreebuffWorker("test", None, ".", "default", **callbacks)
+    worker = FreebuffWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
     spoken = worker._emit_screen_delta("assistant", "", "The sky is blue. Sunlight is")
     assert events == [("assistant", "The sky is blue.")]
@@ -568,7 +573,7 @@ def test_freebuff_rejoins_lines_the_terminal_wrapped():
         "That is the whole of it."
     )
 
-    assert agent_backends._unwrap_screen_text(wrapped) == (
+    assert freebuff_worker._unwrap_screen_text(wrapped) == (
         "Sunlight is made of many colors, and blue scatters more than the others do.\n"
         "That is the whole of it."
     )
@@ -576,14 +581,14 @@ def test_freebuff_rejoins_lines_the_terminal_wrapped():
 
 def test_freebuff_keeps_reading_where_it_left_off_after_the_screen_scrolls():
     """Once the answer is taller than the terminal, the top scrolls away."""
-    assert agent_backends._append_delta("one two three", "one two three four") == "four"
-    assert agent_backends._append_delta("one two three", "two three four") == "four"
-    assert agent_backends._append_delta("one two three", "one two three") == ""
-    assert agent_backends._append_delta("", "one two") == "one two"
+    assert freebuff_worker._append_delta("one two three", "one two three four") == "four"
+    assert freebuff_worker._append_delta("one two three", "two three four") == "four"
+    assert freebuff_worker._append_delta("one two three", "one two three") == ""
+    assert freebuff_worker._append_delta("", "one two") == "one two"
     # The terminal revises where it broke a line as the text below it grows.
     # The same words rewrapped are not new words.
-    assert agent_backends._append_delta("Tips: 1.", "Tips:\n1.") == ""
-    assert agent_backends._append_delta("Tips: 1.", "Tips:\n1. Be clear.") == "Be clear."
+    assert freebuff_worker._append_delta("Tips: 1.", "Tips:\n1.") == ""
+    assert freebuff_worker._append_delta("Tips: 1.", "Tips:\n1. Be clear.") == "Be clear."
 
 
 def test_freebuff_finishes_reading_an_answer_that_scrolled_out_of_view():
@@ -594,11 +599,11 @@ def test_freebuff_finishes_reading_an_answer_that_scrolled_out_of_view():
     """
     answer = "**Rain** falls. It waters the fields. Then it stops."
 
-    assert agent_backends._unspoken_tail("Rain falls. It waters the fields.", answer) == (
+    assert freebuff_worker._unspoken_tail("Rain falls. It waters the fields.", answer) == (
         "Then it stops."
     )
-    assert agent_backends._unspoken_tail(answer, answer) == ""
-    assert agent_backends._unspoken_tail("", answer) == answer
+    assert freebuff_worker._unspoken_tail(answer, answer) == ""
+    assert freebuff_worker._unspoken_tail("", answer) == answer
 
 
 def test_freebuff_prewarmed_terminal_is_only_taken_for_the_message_it_fits():
@@ -618,25 +623,25 @@ def test_freebuff_prewarmed_terminal_is_only_taken_for_the_message_it_fits():
         "before": {"chat-0": 1.0},
         "expires": time.monotonic() + 60,
     }
-    agent_backends._freebuff_prewarm = holding
+    freebuff_terminal._freebuff_prewarm = holding
     try:
         assert (
-            agent_backends._take_freebuff_prewarm("work", "chat-2", "deepseek/deepseek-v4-pro")
+            freebuff_worker._take_freebuff_prewarm("work", "chat-2", "deepseek/deepseek-v4-pro")
             is None
         )
-        assert agent_backends._freebuff_prewarm is None
+        assert freebuff_terminal._freebuff_prewarm is None
         assert holding["ended"].is_set()
 
         holding["ended"] = threading.Event()
-        agent_backends._freebuff_prewarm = holding
-        taken = agent_backends._take_freebuff_prewarm("work", "chat-1", "deepseek/deepseek-v4-pro")
+        freebuff_terminal._freebuff_prewarm = holding
+        taken = freebuff_worker._take_freebuff_prewarm("work", "chat-1", "deepseek/deepseek-v4-pro")
         assert taken is not None
         assert taken["pty"] == "terminal"
         assert taken["before"] == {"chat-0": 1.0}
         assert not taken["ended"].is_set()
-        assert agent_backends._freebuff_prewarm is None
+        assert freebuff_terminal._freebuff_prewarm is None
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
     assert killed == []
 
 
@@ -649,14 +654,14 @@ def test_freebuff_prewarmed_terminal_is_dropped_once_it_is_too_old():
         "before": {},
         "expires": time.monotonic() - 1,
     }
-    agent_backends._freebuff_prewarm = holding
+    freebuff_terminal._freebuff_prewarm = holding
     try:
         assert (
-            agent_backends._take_freebuff_prewarm("work", None, "deepseek/deepseek-v4-pro") is None
+            freebuff_worker._take_freebuff_prewarm("work", None, "deepseek/deepseek-v4-pro") is None
         )
         assert holding["ended"].is_set()
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
 
 
 def test_a_prewarm_before_any_model_was_chosen_fits_the_turn_that_follows(monkeypatch):
@@ -664,25 +669,25 @@ def test_a_prewarm_before_any_model_was_chosen_fits_the_turn_that_follows(monkey
     # on "" while the turn resolved to the preferred model, so the waiting
     # terminal was killed at take every time, and the "" also sent
     # set_freebuff_model scanning the whole binary under the prewarm lock.
-    monkeypatch.setattr(agent_backends, "_freebuff_prewarm", None)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "_read_freebuff_choice", lambda: "")
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_prewarm", None)
+    monkeypatch.setattr(freebuff_terminal, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_terminal, "_read_freebuff_choice", lambda: "")
     chosen: list[str] = []
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", chosen.append)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "set_freebuff_model", chosen.append)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     terminal = object()
     monkeypatch.setattr(
-        agent_backends, "_spawn_freebuff_pty", lambda *_args: (terminal, lambda _timeout: "")
+        freebuff_terminal, "_spawn_freebuff_pty", lambda *_args: (terminal, lambda _timeout: "")
     )
 
-    agent_backends.prewarm_freebuff(".", None, "")
-    _wait_for(lambda: agent_backends._freebuff_prewarm is not None)
+    freebuff_worker.prewarm_freebuff(".", None, "")
+    _wait_for(lambda: freebuff_terminal._freebuff_prewarm is not None)
     try:
-        taken = agent_backends._take_freebuff_prewarm(
+        taken = freebuff_worker._take_freebuff_prewarm(
             ".", None, agent_backends.FREEBUFF_PREFERRED_MODEL
         )
     finally:
-        agent_backends._freebuff_prewarm = None
+        freebuff_terminal._freebuff_prewarm = None
 
     assert taken is not None and taken["pty"] is terminal
     assert chosen == [agent_backends.FREEBUFF_PREFERRED_MODEL]
@@ -692,7 +697,7 @@ def test_a_powershell_script_is_not_offered_as_a_cli(monkeypatch, tmp_path):
     # Popen cannot run a .ps1 (WinError 193), so finding one is worse than
     # finding nothing: every turn fails instead of the wizard offering to install.
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(agent_backends, "blindpilot_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(backend_probes, "blindpilot_data_dir", lambda: tmp_path / "data")
     monkeypatch.setattr(agent_backends.Path, "home", classmethod(lambda cls: tmp_path / "home"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
@@ -713,11 +718,11 @@ def test_freebuff_chat_discovery_searches_all_project_buckets(monkeypatch, tmp_p
     chat = project_root / "different-git-root" / "chats" / "session-id"
     chat.mkdir(parents=True)
 
-    found = agent_backends._freebuff_chat_dirs(str(tmp_path / "workspace"))
+    found = freebuff_terminal._freebuff_chat_dirs(str(tmp_path / "workspace"))
 
     assert "session-id" in found
     assert found["session-id"] == chat.stat().st_mtime
-    assert agent_backends._freebuff_chat_path(str(tmp_path / "workspace"), "session-id") == chat
+    assert freebuff_terminal._freebuff_chat_path(str(tmp_path / "workspace"), "session-id") == chat
 
 
 def test_freebuff_structured_chat_reports_progress_and_authoritative_completion(
@@ -749,14 +754,14 @@ def test_freebuff_structured_chat_reports_progress_and_authoritative_completion(
     with log.open("a", encoding="utf-8") as handle:
         handle.write('{"msg":"Main prompt finished"}\n')
 
-    answer_id, thinking, answer, agents = agent_backends._freebuff_chat_snapshot(chat)
+    answer_id, thinking, answer, agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer_id == "ai-1"
     assert thinking == "Inspecting config"
     assert answer == "Configuration updated."
     assert [agent[:3] for agent in agents] == [("tool-1", "basher", "complete")]
-    assert agent_backends._freebuff_run_status(chat, offset) == "complete"
-    assert agent_backends._freebuff_run_status(chat, log.stat().st_size) == ""
+    assert freebuff_worker._freebuff_run_status(chat, offset) == "complete"
+    assert freebuff_worker._freebuff_run_status(chat, log.stat().st_size) == ""
 
 
 def test_freebuff_finished_turn_can_still_hold_an_agent_marked_running(
@@ -812,12 +817,12 @@ def test_freebuff_finished_turn_can_still_hold_an_agent_marked_running(
         encoding="utf-8",
     )
 
-    _answer_id, _thinking, answer, agents = agent_backends._freebuff_chat_snapshot(chat)
+    _answer_id, _thinking, answer, agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer == "Both numbers are 15 and 56."
     assert ("7ObcAqmVj38-0", "basher", "running") in [agent[:3] for agent in agents]
     # The two coexist. The run is over and an agent still says it is going.
-    assert agent_backends._freebuff_run_status(chat) == "complete"
+    assert freebuff_worker._freebuff_run_status(chat) == "complete"
     assert [agent for agent in agents if agent[2] not in ("complete", "completed")]
 
 
@@ -828,7 +833,7 @@ def test_freebuff_structured_chat_reports_interruption(tmp_path):
         '{"msg":"Agent run cancelled by user (abort error)"}\n', encoding="utf-8"
     )
 
-    assert agent_backends._freebuff_run_status(chat) == "cancelled"
+    assert freebuff_worker._freebuff_run_status(chat) == "cancelled"
 
 
 def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tmp_path):
@@ -852,14 +857,14 @@ def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tm
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
 
     # What the worker records before it sends the resumed prompt.
-    assert agent_backends._freebuff_answer_id(chat) == "ai-first"
+    assert freebuff_worker._freebuff_answer_id(chat) == "ai-first"
 
     # FreeBuff opens the next turn with a divider before writing any reply, and
     # the divider must not be mistaken for the turn's answer.
     messages.append({"id": "divider-2", "variant": "ai", "blocks": [{"type": "mode-divider"}]})
     messages.append({"id": "user-2", "variant": "user", "content": "Second"})
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
-    assert agent_backends._freebuff_chat_snapshot(chat)[0] == "ai-first"
+    assert freebuff_worker._freebuff_chat_snapshot(chat)[0] == "ai-first"
 
     messages.append(
         {
@@ -869,7 +874,7 @@ def test_freebuff_resumed_chat_separates_the_new_answer_from_the_previous_one(tm
         }
     )
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
-    answer_id, _thinking, answer, _agents = agent_backends._freebuff_chat_snapshot(chat)
+    answer_id, _thinking, answer, _agents = freebuff_worker._freebuff_chat_snapshot(chat)
 
     assert answer_id == "ai-second"
     assert answer == "banana"
@@ -894,7 +899,7 @@ def test_freebuff_snapshot_drops_the_interruption_marker_from_kept_text(tmp_path
     ]
     (chat / "chat-messages.json").write_text(json.dumps(messages), encoding="utf-8")
 
-    assert agent_backends._freebuff_chat_snapshot(chat)[2] == "apple"
+    assert freebuff_worker._freebuff_chat_snapshot(chat)[2] == "apple"
 
 
 def test_backend_processes_are_launched_without_a_console_window():
@@ -924,12 +929,16 @@ def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
         captured.update(kwargs)
         raise OSError("stop here; the launch arguments are what matter")
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    # The pool's _start_codex_server reads codex_worker's own find_backend_cli
+    # copy, so patch that too or discovery returns None ("Codex is not
+    # installed") before the launch the test is checking.
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("test", None, ".", "default", **callbacks)
+    worker = CodexWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
     worker._do_run()
 
@@ -964,7 +973,7 @@ def test_freebuff_keeps_its_choice_when_freebuff_resets_its_own_setting(
     )
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: str(wrapper))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: str(wrapper))
     agent_backends.invalidate_backend_cache(agent_backends.BACKEND_FREEBUFF)
 
     # FreeBuff has left its own recommendation behind and BlindPilot has no
@@ -989,19 +998,21 @@ def test_freebuff_reports_a_terminal_that_closes_before_it_is_ready(monkeypatch)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
     def fake_spawn(_args):
         worker._stream_ended.set()
         return lambda _timeout: ""
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (["deepseek/deepseek-v4-pro"], "deepseek/deepseek-v4-pro", ""),
     )
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(fake_spawn))
 
     worker._do_run()
@@ -1020,11 +1031,13 @@ def test_freebuff_gives_up_on_a_terminal_that_starts_and_then_paints_nothing(mon
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
     # Alive, readable, and permanently silent: the terminal never ends and
     # never paints, which is the whole of the failure being reported.
     monkeypatch.setattr(
@@ -1040,19 +1053,19 @@ def test_freebuff_gives_up_on_a_terminal_that_starts_and_then_paints_nothing(mon
 
 def test_freebuff_startup_silence_quotes_the_last_thing_it_showed():
     """A terminal that painted something before going quiet says what."""
-    reason = agent_backends._freebuff_startup_silence("Checking for updates...", 120.0)
+    reason = freebuff_worker._freebuff_startup_silence("Checking for updates...", 120.0)
     assert "Checking for updates..." in reason
     assert "120" in reason
 
 
 def test_freebuff_narrates_only_finished_sentences():
     """Half a sentence read aloud is what makes a streamed run sound broken."""
-    assert agent_backends._complete_sentences("Maple Ridge is a city. Known for its") == (
+    assert freebuff_worker._complete_sentences("Maple Ridge is a city. Known for its") == (
         "Maple Ridge is a city."
     )
-    assert agent_backends._complete_sentences("The user is asking about") == ""
-    assert agent_backends._complete_sentences("First line\nsecond half") == "First line"
-    assert agent_backends._complete_sentences('He said "go." Then') == 'He said "go."'
+    assert freebuff_worker._complete_sentences("The user is asking about") == ""
+    assert freebuff_worker._complete_sentences("First line\nsecond half") == "First line"
+    assert freebuff_worker._complete_sentences('He said "go." Then') == 'He said "go."'
 
 
 # ----- Compaction -----
@@ -1121,7 +1134,7 @@ class _ScriptedCodexServer:
 def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     """Codex has no /compact message, so sending one as text would do nothing."""
     server = _ScriptedCodexServer()
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", lambda *_a, **_k: server)
     completed: list[str] = []
@@ -1129,7 +1142,9 @@ def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     callbacks = _callbacks()
     callbacks["on_complete"] = completed.append
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("/compact", "thread-1", ".", "default", compact=True, **callbacks)
+    worker = CodexWorker(
+        "/compact", "thread-1", ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
 
     worker._do_run()
 
@@ -1143,11 +1158,13 @@ def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
 
 
 def test_codex_will_not_compact_a_conversation_that_has_not_started(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("/compact", None, ".", "default", compact=True, **callbacks)
+    worker = CodexWorker(
+        "/compact", None, ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
 
     worker._do_run()
 
@@ -1239,11 +1256,11 @@ def _opencode_event(kind: str, session_id: str = "ses_test", **properties) -> di
 def _opencode_turn(events: list[dict], monkeypatch, **kwargs) -> tuple[dict, object]:
     """Run one OpencodeWorker turn against a scripted server."""
     server = _ScriptedOpencodeServer(events)
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     known = kwargs.pop("commands", [])
-    monkeypatch.setattr(agent_backends, "opencode_commands", lambda *_a, **_k: known)
+    monkeypatch.setattr(opencode_worker, "opencode_commands", lambda *_a, **_k: known)
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1256,7 +1273,7 @@ def _opencode_turn(events: list[dict], monkeypatch, **kwargs) -> tuple[dict, obj
         kwargs.pop("cwd", "/work"),
         kwargs.pop("permission_mode", "default"),
         **kwargs,
-        **callbacks,
+        callbacks=TurnCallbacks(**callbacks),
     )
     worker._do_run()
     return seen, server
@@ -1279,11 +1296,11 @@ def test_opencode_worker_is_the_adapter_for_opencode():
 def test_opencode_event_handler_does_not_collide_with_python_313_thread_handle(monkeypatch):
     """Python 3.13 stores an internal object on every Thread as ``_handle``."""
     server = _ScriptedOpencodeServer([_opencode_event("session.idle")])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     callbacks = _callbacks()
     completed: list[str] = []
     callbacks["on_complete"] = completed.append
-    worker = OpencodeWorker("hello", None, "/work", "default", **callbacks)
+    worker = OpencodeWorker("hello", None, "/work", "default", callbacks=TurnCallbacks(**callbacks))
     # Reproduce the attribute Python 3.13 adds even when this test is running on
     # an older interpreter. Event dispatch must not try to call it as a method.
     worker._handle = object()
@@ -1461,12 +1478,12 @@ def test_opencode_says_so_when_it_cannot_answer_a_permission_request(monkeypatch
     ]
     server = _ScriptedOpencodeServer(events)
     server.fail = {"/permissions/", "/permission/"}
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     activity: list[tuple[str, str]] = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: activity.append((kind, value))
-    OpencodeWorker("hi", None, "/work", "auto", **callbacks)._do_run()
+    OpencodeWorker("hi", None, "/work", "auto", callbacks=TurnCallbacks(**callbacks))._do_run()
 
     assert any("Could not answer a permission request" in text for _kind, text in activity)
 
@@ -1542,9 +1559,9 @@ def test_opencode_refused_history_after_a_question_is_repaired_and_resent(monkey
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1556,8 +1573,7 @@ def test_opencode_refused_history_after_a_question_is_repaired_and_resent(monkey
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **callbacks),
     )._do_run()
 
     # The poisoned question step and the empty step it died on are deleted;
@@ -1588,9 +1604,9 @@ def test_opencode_refused_history_without_a_question_is_only_reported(monkeypatc
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
 
     seen, server2 = _opencode_turn(events, monkeypatch, session_id="ses_test")
 
@@ -1615,9 +1631,9 @@ def test_opencode_a_second_refusal_is_reported_not_looped(monkeypatch):
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1629,8 +1645,7 @@ def test_opencode_a_second_refusal_is_reported_not_looped(monkeypatch):
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **callbacks),
     )._do_run()
 
     deleted = [path for method, path, _b in server.calls if method == "DELETE"]
@@ -1650,9 +1665,9 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
     ]
     server = _ScriptedOpencodeServer(events)
     server.replies["/message"] = _POISONED_HISTORY
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: [])
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: [])
     seen: dict = {"activity": [], "complete": [], "failed": [], "session": []}
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: seen["activity"].append((kind, value))
@@ -1664,8 +1679,7 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: None,
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **callbacks),
     )._do_run()
 
     assert seen["failed"]
@@ -1674,7 +1688,7 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
 
 def test_opencode_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     events = [_opencode_event("session.compacted")]
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
 
     seen, server = _opencode_turn(
         events,
@@ -1713,8 +1727,10 @@ def test_opencode_sends_a_model_only_when_a_tab_chose_one(monkeypatch):
 
 def test_opencode_steering_adds_to_the_turn_already_running(monkeypatch):
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    worker = OpencodeWorker(
+        "hello", "ses_test", "/work", "default", callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._server = server
     worker._session_id = "ses_test"
 
@@ -1778,9 +1794,14 @@ def test_opencode_steering_leaves_the_turns_attachments_behind(monkeypatch, tmp_
     picture = tmp_path / "shot.png"
     picture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     worker = OpencodeWorker(
-        "hello", "ses_test", "/work", "default", attachments=(str(picture),), **_callbacks()
+        "hello",
+        "ses_test",
+        "/work",
+        "default",
+        attachments=(str(picture),),
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     worker._server = server
     worker._session_id = "ses_test"
@@ -1793,7 +1814,7 @@ def test_opencode_steering_leaves_the_turns_attachments_behind(monkeypatch, tmp_
 
 
 def test_opencode_file_parts_are_sniffed_capped_and_named(tmp_path):
-    from agent_backends import _opencode_file_part
+    from opencode_worker import _opencode_file_part
 
     picture = tmp_path / "shot.png"
     picture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
@@ -1877,8 +1898,10 @@ def test_opencode_says_patches_subtasks_and_files_once_each(monkeypatch):
 
 def test_opencode_stop_interrupts_the_turn_and_releases_the_reader(monkeypatch):
     server = _ScriptedOpencodeServer([])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
-    worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
+    worker = OpencodeWorker(
+        "hello", "ses_test", "/work", "default", callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._server = server
     worker._stream = server.open("GET", "/event")
 
@@ -1903,7 +1926,7 @@ def test_opencode_catalog_names_models_by_provider_and_pools_their_efforts(monke
         "default": {"opencode-go": "kimi-k3"},
         "model": "",
     }
-    monkeypatch.setattr(agent_backends, "_opencode_catalog", lambda *_a, **_k: catalog)
+    monkeypatch.setattr(opencode_worker, "_opencode_catalog", lambda *_a, **_k: catalog)
 
     models, efforts, current, effort, error = agent_backends.opencode_model_options("/work")
 
@@ -1917,19 +1940,31 @@ def test_opencode_catalog_names_models_by_provider_and_pools_their_efforts(monke
 
 
 def test_opencode_never_sends_an_effort_the_chosen_model_does_not_offer(monkeypatch):
-    monkeypatch.setattr(agent_backends, "opencode_model_efforts", lambda *_a, **_k: ["max"])
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_model_efforts", lambda *_a, **_k: ["max"])
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     server = _ScriptedOpencodeServer([_opencode_event("session.idle")])
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
 
     OpencodeWorker(
-        "hi", None, "/work", "default", model="p/m", effort="low", **_callbacks()
+        "hi",
+        None,
+        "/work",
+        "default",
+        model="p/m",
+        effort="low",
+        callbacks=TurnCallbacks(**_callbacks()),
     )._do_run()
     assert "variant" not in server.body("prompt_async")
 
     server.calls.clear()
     OpencodeWorker(
-        "hi", None, "/work", "default", model="p/m", effort="max", **_callbacks()
+        "hi",
+        None,
+        "/work",
+        "default",
+        model="p/m",
+        effort="max",
+        callbacks=TurnCallbacks(**_callbacks()),
     )._do_run()
     assert server.body("prompt_async")["variant"] == "max"
 
@@ -1950,8 +1985,8 @@ def test_opencode_server_is_reached_over_loopback_behind_a_password(monkeypatch)
         return FakeProcess()
 
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(agent_backends, "_free_port", lambda: 41234)
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(opencode_worker, "_free_port", lambda: 41234)
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
 
@@ -1984,8 +2019,12 @@ def test_a_port_taken_before_the_child_binds_is_retried_on_a_fresh_one(monkeypat
 
     ports = iter([41234, 41235])
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(agent_backends, "_free_port", lambda: next(ports))
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(opencode_worker, "_free_port", lambda: next(ports))
+    # OpencodeServer calls its own copy of subprocess_env; patch that (not just
+    # backend_probes') so its login-shell PATH probe does not run through the
+    # faked Popen and get counted as a launch.
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(opencode_worker, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
 
@@ -2003,7 +2042,7 @@ def test_opencode_prefers_its_own_executable_over_the_npm_wrapper(monkeypatch, t
     monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
 
     # Terminating a .cmd launcher leaves the server it started holding the port.
-    assert agent_backends._opencode_server_binary(str(wrapper)) == str(native)
+    assert opencode_worker._opencode_server_binary(str(wrapper)) == str(native)
 
 
 def test_opencode_compaction_is_offered_and_freebuffs_is_not():
@@ -2052,16 +2091,16 @@ def test_opencode_reports_a_command_that_will_not_run_exactly_once(monkeypatch):
     """Its command request answers only when the turn ends, so a failure can be
     noticed from either thread — and the user should hear about it once."""
     monkeypatch.setattr(
-        agent_backends, "opencode_commands", lambda *_a, **_k: [("init", "guided setup")]
+        opencode_worker, "opencode_commands", lambda *_a, **_k: [("init", "guided setup")]
     )
-    monkeypatch.setattr(agent_backends, "opencode_default_model", lambda *_a, **_k: "")
+    monkeypatch.setattr(opencode_worker, "opencode_default_model", lambda *_a, **_k: "")
     server = _ScriptedOpencodeServer([])
     server.fail = {"/command"}
-    monkeypatch.setattr(agent_backends, "opencode_server", lambda: server)
+    monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = OpencodeWorker("/init", None, "/work", "default", **callbacks)
+    worker = OpencodeWorker("/init", None, "/work", "default", callbacks=TurnCallbacks(**callbacks))
 
     worker._do_run()
     _wait_for(lambda: bool(failures))
@@ -2087,8 +2126,9 @@ def test_codex_request_user_input_is_answered_by_question_id():
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions) or [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions) or [["Spaces"]], **callbacks
+        ),
     )
     worker._send = lambda message: sent.append(message) or True
 
@@ -2121,7 +2161,11 @@ def test_codex_request_user_input_is_answered_by_question_id():
 def test_codex_question_nobody_answered_still_ends_the_turn():
     sent = []
     worker = CodexWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._send = lambda message: sent.append(message) or True
 
@@ -2141,8 +2185,9 @@ def test_opencode_question_is_replied_to_in_the_order_it_was_asked():
         None,
         ".",
         "default",
-        on_question=lambda _questions: [["Rust"], ["Tests", "Docs"]],
-        **_callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda _questions: [["Rust"], ["Tests", "Docs"]], **_callbacks()
+        ),
     )
     worker._server = object()
     worker._session_id = "ses_1"
@@ -2183,7 +2228,11 @@ def test_opencode_question_is_replied_to_in_the_order_it_was_asked():
 def test_opencode_question_nobody_answered_is_rejected_not_left_open():
     posted = []
     worker = OpencodeWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._server = object()
     worker._session_id = "ses_1"
@@ -2201,7 +2250,7 @@ def test_opencode_question_nobody_answered_is_rejected_not_left_open():
 
 
 def test_opencode_multiple_flag_is_what_makes_a_question_multi_select():
-    (single, several) = agent_backends._opencode_questions(
+    (single, several) = opencode_worker._opencode_questions(
         [
             {"question": "One?", "options": [{"label": "A"}]},
             {"question": "Many?", "multiple": True, "options": [{"label": "B"}]},
@@ -2236,7 +2285,7 @@ FREEBUFF_QUESTION_SCREEN = "\n".join(
 
 
 def test_freebuff_reads_the_question_that_is_open_and_counts_the_rest():
-    total, index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    total, index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
 
     assert (total, index) == (2, 0)
     assert question is not None
@@ -2249,7 +2298,7 @@ def test_freebuff_reads_the_question_that_is_open_and_counts_the_rest():
 
 def test_freebuff_checkboxes_mean_the_question_takes_several_answers():
     screen = FREEBUFF_QUESTION_SCREEN.replace("○ Tabs", "☐ Tabs").replace("○ Spaces", "☑ Spaces")
-    _total, _index, question = agent_backends._freebuff_open_question(screen)
+    _total, _index, question = freebuff_worker._freebuff_open_question(screen)
 
     assert question is not None
     assert question.multi_select is True
@@ -2258,43 +2307,51 @@ def test_freebuff_checkboxes_mean_the_question_takes_several_answers():
 def test_freebuff_answers_a_question_with_the_keys_its_box_understands():
     keys = []
     worker = FreebuffWorker(
-        "test", None, ".", "default", on_question=lambda _questions: [["Spaces"]], **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **_callbacks()),
     )
     worker._write = lambda text: keys.append(text) or True
 
-    _total, _index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    _total, _index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
     assert question is not None
     worker._choose(question, ["Spaces"])
 
     # "Spaces" is the second answer, so one step down and Enter takes it.
-    assert keys == [agent_backends._KEY_DOWN, agent_backends._KEY_ENTER]
+    assert keys == [freebuff_worker._KEY_DOWN, freebuff_worker._KEY_ENTER]
 
 
 def test_freebuff_typed_answer_walks_past_the_options_to_its_own_entry():
     keys = []
-    worker = FreebuffWorker("test", None, ".", "default", **_callbacks())
+    worker = FreebuffWorker("test", None, ".", "default", callbacks=TurnCallbacks(**_callbacks()))
     worker._write = lambda text: keys.append(text) or True
 
-    _total, _index, question = agent_backends._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
+    _total, _index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
     assert question is not None
     worker._choose(question, ["four spaces, always"])
 
-    down = agent_backends._KEY_DOWN
-    enter = agent_backends._KEY_ENTER
+    down = freebuff_worker._KEY_DOWN
+    enter = freebuff_worker._KEY_ENTER
     assert keys == [down, down, enter, "\x1b[200~four spaces, always\x1b[201~", enter]
 
 
 def test_freebuff_a_question_nobody_answered_closes_the_box():
     keys = []
     worker = FreebuffWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._write = lambda text: keys.append(text) or True
 
     assert worker._answer_questions(lambda _wait: FREEBUFF_QUESTION_SCREEN) is True
     # Escape is how FreeBuff is told the questions were skipped, which is what
     # it reports to the model.
-    assert keys == [agent_backends._KEY_ESCAPE]
+    assert keys == [freebuff_worker._KEY_ESCAPE]
 
 
 def test_freebuff_stops_asking_once_the_box_stops_changing():
@@ -2304,8 +2361,10 @@ def test_freebuff_stops_asking_once_the_box_stops_changing():
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions[0].question) or [["Tabs"]],
-        **_callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions[0].question) or [["Tabs"]],
+            **_callbacks(),
+        ),
     )
     worker._write = lambda _text: True
 
@@ -2319,7 +2378,7 @@ def test_freebuff_start_screen_is_recognised_however_it_is_worded():
     # The chooser is what stands between a hidden terminal and its composer, so
     # missing it costs the whole message, not just the model. Its wording has
     # moved between FreeBuff releases; all of it has to count.
-    picker = agent_backends._FREEBUFF_PICKER_RE
+    picker = freebuff_worker._FREEBUFF_PICKER_RE
     assert picker.search("  RECOMMENDED  DeepSeek V4 Pro")
     assert picker.search("  Start coding for free   1 day streak")
     assert picker.search("  See all 4 models")
@@ -2332,9 +2391,9 @@ def test_a_cli_is_started_with_a_path_that_can_reach_node(monkeypatch):
     # shim. Handing a child that bare PATH is how FreeBuff died before it drew
     # a single frame, so the environment must carry both the CLI's own folder
     # and whatever a terminal would have had.
-    monkeypatch.setattr(agent_backends, "_login_shell_path", None)
+    monkeypatch.setattr(backend_probes, "_login_shell_path", None)
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "login_shell_path_dirs",
         lambda: ["/opt/homebrew/bin", "/usr/bin"],
     )
@@ -2352,7 +2411,7 @@ def test_a_cli_is_started_with_a_path_that_can_reach_node(monkeypatch):
 
 
 def test_a_login_shell_that_misbehaves_costs_only_the_extra_path(monkeypatch):
-    monkeypatch.setattr(agent_backends, "_login_shell_path", None)
+    monkeypatch.setattr(backend_probes, "_login_shell_path", None)
     monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.setattr(agent_backends.os.path, "isfile", lambda _path: True)
 
@@ -2367,14 +2426,14 @@ def test_a_login_shell_that_misbehaves_costs_only_the_extra_path(monkeypatch):
 def test_freebuff_reports_why_its_terminal_died():
     # "Reinstall BlindPilot" is not something a missing Node can be fixed by,
     # and the terminal said what was actually wrong before it closed.
-    missing_node = agent_backends._freebuff_launch_failure("env: node: No such file or directory")
+    missing_node = freebuff_worker._freebuff_launch_failure("env: node: No such file or directory")
     assert "node" in missing_node.casefold()
     assert "Node.js" in missing_node
 
-    other = agent_backends._freebuff_launch_failure("Error: could not reach the FreeBuff service")
+    other = freebuff_worker._freebuff_launch_failure("Error: could not reach the FreeBuff service")
     assert "could not reach the FreeBuff service" in other
 
-    assert "without saying why" in agent_backends._freebuff_launch_failure("")
+    assert "without saying why" in freebuff_worker._freebuff_launch_failure("")
 
 
 FREEBUFF_EXPANDED_PICKER = """
@@ -2418,14 +2477,14 @@ def test_a_model_the_installed_release_dropped_is_not_offered(monkeypatch, tmp_p
     # FreeBuff removes models between releases. Continuing to offer one it has
     # dropped means picking it, waiting out a picker that will never show it,
     # and losing the message.
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_models_from_install",
         lambda _binary: ["openai/gpt-5.6-luna", "mimo/mimo-v2.5"],
     )
     monkeypatch.setattr(
-        agent_backends, "_read_freebuff_choice", lambda: agent_backends.FREEBUFF_PREFERRED_MODEL
+        backend_probes, "_read_freebuff_choice", lambda: agent_backends.FREEBUFF_PREFERRED_MODEL
     )
 
     models, current, error = freebuff_model_options()
@@ -2438,9 +2497,9 @@ def test_a_model_the_installed_release_dropped_is_not_offered(monkeypatch, tmp_p
 def test_a_catalog_that_could_not_be_read_still_offers_the_remembered_model(
     monkeypatch, tmp_path, fake_home
 ):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "_freebuff_models_from_install", lambda _binary: [])
-    monkeypatch.setattr(agent_backends, "_read_freebuff_choice", lambda: "vendor/remembered")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "_freebuff_models_from_install", lambda _binary: [])
+    monkeypatch.setattr(backend_probes, "_read_freebuff_choice", lambda: "vendor/remembered")
 
     models, current, error = freebuff_model_options()
 
@@ -2717,8 +2776,8 @@ def test_a_probe_keeps_stderr_when_stdout_also_said_something(monkeypatch):
     """A CLI that painted a banner and then failed used to lose the failure."""
     import sys
 
-    monkeypatch.setattr(agent_backends, "login_shell_path_dirs", list)
-    code, text = agent_backends._probe_backend(
+    monkeypatch.setattr(backend_probes, "login_shell_path_dirs", list)
+    code, text = backend_probes._probe_backend(
         sys.executable,
         [
             "-c",
@@ -2779,7 +2838,7 @@ def _status_lines(report: str) -> dict[str, str]:
 
 
 def test_status_says_so_when_the_backend_is_not_installed(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: None)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: None)
     for backend in agent_backends.BACKEND_IDS:
         fields = _status_lines(backend_status(backend))
         assert fields["Backend"] == backend_label(backend)
@@ -2788,9 +2847,9 @@ def test_status_says_so_when_the_backend_is_not_installed(monkeypatch):
 
 def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fake_home):
     """Whichever backend is selected, the report answers the same question."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9")
@@ -2809,14 +2868,14 @@ def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fa
     data = tmp_path / "opencode-data"
     data.mkdir()
     (data / "auth.json").write_text(json.dumps({"anthropic": {"type": "api"}}), encoding="utf-8")
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     _hermes_pool(monkeypatch, tmp_path, {"anthropic": [{"id": "1", "label": "claude_code"}]})
     # Muse, like Hermes above, gets an adapter-level answer rather than the
     # machine's real one (this machine has a live WSL Muse and its account).
-    monkeypatch.setattr(agent_backends, "_muse_signed_in_checked", lambda: True)
-    monkeypatch.setattr(agent_backends, "_muse_version_probe", lambda: "9.9.9")
-    monkeypatch.setattr(agent_backends, "_muse_account_lines", lambda: ["Signed in: yes"])
+    monkeypatch.setattr(backend_probes, "_muse_signed_in_checked", lambda: True)
+    monkeypatch.setattr(backend_probes, "_muse_version_probe", lambda: "9.9.9")
+    monkeypatch.setattr(backend_probes, "_muse_account_lines", lambda: ["Signed in: yes"])
     # muse.ai answers `muse-cli status` from its gateway; the fake stands in
     # for the user's real cloud agent.
     import museai_backend
@@ -2841,9 +2900,9 @@ def test_every_backend_reports_whether_it_is_signed_in(monkeypatch, tmp_path, fa
 
 def test_status_reads_the_account_out_of_claude_auth_status(monkeypatch):
     """Claude Code's auth status answers in JSON, which is where the account is."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "2.1.257 (Claude Code)")
@@ -2875,9 +2934,9 @@ def test_status_reads_the_account_out_of_claude_auth_status(monkeypatch):
 
 
 def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, tmp_path, fake_home):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9") if args == ["--version"] else (1, '{"loggedIn": false}')
@@ -2885,15 +2944,18 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
     )
     empty = tmp_path / "opencode-empty"
     empty.mkdir()
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: empty)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: empty)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     _hermes_pool(monkeypatch, tmp_path, {})
     # Muse reads its credentials off disk and its version through WSL; both
     # are pointed at nothing, the same way every other backend is fenced off
     # from the real machine this suite runs on.
-    monkeypatch.setattr(agent_backends, "_muse_signed_in_checked", lambda: False)
-    monkeypatch.setattr(agent_backends, "_muse_version_probe", lambda: "")
-    monkeypatch.setattr(agent_backends, "_muse_account_lines", lambda: ["Signed in: no"])
+    monkeypatch.setattr(backend_probes, "_muse_signed_in_checked", lambda: False)
+    monkeypatch.setattr(backend_probes, "_muse_version_probe", lambda: "")
+    monkeypatch.setattr(backend_probes, "_muse_account_lines", lambda: ["Signed in: no"])
 
     for backend in agent_backends.BACKEND_IDS:
         fields = _status_lines(backend_status(backend))
@@ -2903,9 +2965,9 @@ def test_status_reports_a_signed_out_backend_rather_than_guessing(monkeypatch, t
 
 def test_status_keeps_a_providers_own_words_when_it_stops_answering_in_json(monkeypatch):
     """A future Claude Code that drops the JSON still has something to say."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "9.9.9") if args == ["--version"] else (0, "Logged in as person@example.com")
@@ -2918,9 +2980,9 @@ def test_status_keeps_a_providers_own_words_when_it_stops_answering_in_json(monk
 
 def test_status_separates_a_no_from_a_provider_that_could_not_be_asked(monkeypatch):
     """A CLI that will not run at all is a different answer from signed out."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "cli")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "cli")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (0, "9.9.9") if args == ["--version"] else (None, ""),
     )
@@ -2929,9 +2991,9 @@ def test_status_separates_a_no_from_a_provider_that_could_not_be_asked(monkeypat
 
 
 def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "opencode")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "opencode")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.18.25")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.18.25")
     )
     data = tmp_path / "opencode-data"
     data.mkdir()
@@ -2939,7 +3001,7 @@ def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp
         json.dumps({"opencode-go": {"type": "api"}, "anthropic": {"type": "oauth"}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     fields = _status_lines(backend_status(BACKEND_OPENCODE))
     assert fields["Connected providers"] == "anthropic, opencode-go"
@@ -2948,9 +3010,9 @@ def test_status_names_the_opencode_providers_that_are_connected(monkeypatch, tmp
 def test_status_reports_the_freebuff_account_from_its_stored_credentials(
     monkeypatch, tmp_path, fake_home
 ):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "0.0.163")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "0.0.163")
     )
     credential = tmp_path / ".config" / "manicode" / "credentials.json"
     credential.parent.mkdir(parents=True)
@@ -2985,7 +3047,7 @@ def _usage_labels(lines: list[str]) -> list[str]:
 def test_usage_reports_the_windows_claude_code_names_and_no_others(monkeypatch):
     """A plan window the account does not have is left out, not written as unknown."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,
@@ -3008,7 +3070,7 @@ def test_usage_reports_the_windows_claude_code_names_and_no_others(monkeypatch):
 
 def test_usage_puts_the_accounts_own_weekly_window_before_one_models(monkeypatch):
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,
@@ -3033,7 +3095,7 @@ def test_usage_puts_the_accounts_own_weekly_window_before_one_models(monkeypatch
 def test_usage_says_nothing_when_the_plan_windows_do_not_apply(monkeypatch):
     """An API key, Bedrock or Vertex session is metered by none of this."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {"rate_limits_available": False, "rate_limits": None},
     )
@@ -3041,15 +3103,15 @@ def test_usage_says_nothing_when_the_plan_windows_do_not_apply(monkeypatch):
 
 
 def test_usage_says_nothing_when_the_backend_could_not_be_asked(monkeypatch):
-    monkeypatch.setattr(agent_backends, "_claude_usage_payload", lambda _binary, _timeout: None)
-    monkeypatch.setattr(agent_backends, "_codex_usage_result", lambda _binary, _timeout: None)
+    monkeypatch.setattr(backend_probes, "_claude_usage_payload", lambda _binary, _timeout: None)
+    monkeypatch.setattr(backend_probes, "_codex_usage_result", lambda _binary, _timeout: None)
     assert agent_backends.backend_usage_lines(BACKEND_CLAUDE, "claude") == []
     assert agent_backends.backend_usage_lines(BACKEND_CODEX, "codex") == []
 
 
 def test_usage_names_a_codex_window_by_its_length_not_its_position():
     """Codex's `primary` is the weekly window on some plans and the five-hour one on others."""
-    windows = agent_backends._codex_usage_windows(
+    windows = backend_probes._codex_usage_windows(
         {
             "rateLimits": {
                 "limitName": None,
@@ -3107,7 +3169,7 @@ def test_usage_keeps_two_codex_windows_that_would_be_called_the_same_thing():
     report two real windows that no name can tell apart. Losing one of those
     would lose a limit rather than a duplicate.
     """
-    windows = agent_backends._codex_usage_windows(
+    windows = backend_probes._codex_usage_windows(
         {
             "rateLimits": {
                 "limitName": None,
@@ -3147,7 +3209,7 @@ def test_usage_keeps_two_codex_windows_that_would_be_called_the_same_thing():
 def test_usage_reports_the_freebuff_credit_balance_and_when_the_cycle_refills(monkeypatch):
     """FreeBuff counts credits rather than filling a window, and says so."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_usage_payload",
         lambda _timeout: {
             "type": "usage-response",
@@ -3168,7 +3230,7 @@ def test_usage_reports_the_freebuff_credit_balance_and_when_the_cycle_refills(mo
 def test_usage_says_what_is_left_even_when_the_cycle_held_nothing(monkeypatch):
     """An empty balance has no fraction to report, and still has a figure."""
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_freebuff_usage_payload",
         lambda _timeout: {"usage": 0, "remainingBalance": 0, "next_quota_reset": None},
     )
@@ -3178,14 +3240,14 @@ def test_usage_says_what_is_left_even_when_the_cycle_held_nothing(monkeypatch):
 
 # Held before the fixture that keeps the rest of the suite off the network
 # replaces it, so the reading itself can still be exercised.
-_REAL_FREEBUFF_USAGE_PAYLOAD = agent_backends._freebuff_usage_payload
+_REAL_FREEBUFF_USAGE_PAYLOAD = backend_probes._freebuff_usage_payload
 
 
 def test_the_freebuff_balance_is_not_asked_for_when_nobody_is_signed_in(monkeypatch):
     """Signed out there is nothing to ask with, so no request is made."""
     reached = []
-    monkeypatch.setattr(agent_backends, "_freebuff_account", lambda: None)
-    monkeypatch.setattr(agent_backends, "_freebuff_app_url", lambda: reached.append("url") or "")
+    monkeypatch.setattr(backend_probes, "_freebuff_account", lambda: None)
+    monkeypatch.setattr(backend_probes, "_freebuff_app_url", lambda: reached.append("url") or "")
     assert _REAL_FREEBUFF_USAGE_PAYLOAD(5) is None
     assert reached == []
 
@@ -3247,14 +3309,14 @@ def test_status_names_the_providers_hermes_signed_in_to_rather_than_opencodes(
     monkeypatch, tmp_path
 ):
     """Hermes holds a credential per provider, and the report names its own."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "hermes")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "hermes")
     monkeypatch.setattr(
-        agent_backends, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.2.3")
+        backend_probes, "_probe_backend", lambda _binary, _args, _timeout: (0, "1.2.3")
     )
     data = tmp_path / "opencode-data"
     data.mkdir()
     (data / "auth.json").write_text(json.dumps({"opencode-go": {"type": "api"}}), encoding="utf-8")
-    monkeypatch.setattr(agent_backends, "_opencode_data_dir", lambda: data)
+    monkeypatch.setattr(backend_probes, "_opencode_data_dir", lambda: data)
     _hermes_pool(
         monkeypatch,
         tmp_path,
@@ -3268,16 +3330,16 @@ def test_status_names_the_providers_hermes_signed_in_to_rather_than_opencodes(
 
 
 def test_status_carries_the_usage_windows(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "claude")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "claude")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda _binary, args, _timeout: (
             (0, "2.1.263 (Claude Code)") if args == ["--version"] else (0, '{"loggedIn": true}')
         ),
     )
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_claude_usage_payload",
         lambda _binary, _timeout: {
             "rate_limits_available": True,

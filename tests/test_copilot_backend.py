@@ -13,6 +13,7 @@ import threading
 import agent_backends
 import copilot_backend
 import session_history
+from backend_registry import TurnCallbacks
 from task_list import TaskList
 
 
@@ -33,11 +34,14 @@ def _worker(**overrides):
         "on_done": lambda: None,
         "on_subagent": lambda *report: said["subagents"].append(report),
     }
-    options.update(overrides)
-    prompt = options.pop("prompt", "hello")
-    session = options.pop("session", None)
-    mode = options.pop("mode", "bypassPermissions")
-    worker = copilot_backend.CopilotWorker(prompt, session, "C:/proj", mode, **options)
+    options.update({k: v for k, v in overrides.items() if k.startswith("on_")})
+    extras = {k: v for k, v in overrides.items() if not k.startswith("on_")}
+    prompt = extras.pop("prompt", "hello")
+    session = extras.pop("session", None)
+    mode = extras.pop("mode", "bypassPermissions")
+    worker = copilot_backend.CopilotWorker(
+        prompt, session, "C:/proj", mode, callbacks=TurnCallbacks(**options), **extras
+    )
     return worker, said
 
 

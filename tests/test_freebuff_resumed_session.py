@@ -17,9 +17,11 @@ prewarm for the next message.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_terminal
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 READY = "Describe your task"
 WORKING = "do the work\nHere is the answer.\nEsc to stop"
@@ -50,12 +52,14 @@ def _worker(turn: _Turn, session_id):
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=turn.sessions.append,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=turn.sessions.append,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
 
 
@@ -79,17 +83,17 @@ def _stub(monkeypatch, worker, dirs, prewarmed):
         return read
 
     worker._write = write
-    monkeypatch.setattr(agent_backends, "_freebuff_prewarm", None)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", dirs)
-    monkeypatch.setattr(agent_backends, "_freebuff_boot_ready", lambda *_a: True)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_prewarm", None)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", dirs)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_boot_ready", lambda *_a: True)
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "prewarm_freebuff",
         lambda _cwd, session_id, _model, delay=0.0: prewarmed.append(session_id),
     )
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
 
 
@@ -107,7 +111,7 @@ def test_a_resumed_turn_does_not_adopt_a_folder_that_appeared_while_it_ran(monke
     _stub(monkeypatch, worker, dirs, prewarmed)
     # The conversation being resumed cannot be found, which is the whole point:
     # there is no chat path, and there never will be one this turn.
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_path", lambda _cwd, _sid: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _cwd, _sid: None)
 
     worker._do_run()
 
@@ -131,9 +135,9 @@ def test_a_new_turn_still_learns_the_conversation_it_created(monkeypatch, tmp_pa
     _stub(monkeypatch, worker, dirs, prewarmed)
     chat = tmp_path / "chat-ours"
     chat.mkdir()
-    monkeypatch.setattr(agent_backends, "_freebuff_run_status", lambda *_: "complete")
+    monkeypatch.setattr(freebuff_worker, "_freebuff_run_status", lambda *_: "complete")
     monkeypatch.setattr(
-        agent_backends, "_freebuff_chat_path", lambda _cwd, sid: chat if sid else None
+        freebuff_terminal, "_freebuff_chat_path", lambda _cwd, sid: chat if sid else None
     )
 
     worker._do_run()

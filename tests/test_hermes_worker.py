@@ -8,6 +8,7 @@ turn was diagnosed as hung and then killed by the idle limit.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 
@@ -91,7 +92,11 @@ def test_a_completion_callback_that_raises_is_not_announced_as_a_failed_turn():
         raise RuntimeError("the listener fell over")
 
     worker = HermesWorker(
-        "hi", None, ".", "default", **_callbacks(on_complete=boom, on_failed=failures.append)
+        "hi",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(**_callbacks(on_complete=boom, on_failed=failures.append)),
     )
     worker._transport = _ScriptedTransport(
         [_event("message.complete", {"status": "complete", "text": "the answer"})]
@@ -167,10 +172,12 @@ def test_a_stream_of_subagent_progress_does_not_trip_the_idle_path(monkeypatch):
         None,
         ".",
         "default",
-        **_callbacks(
-            on_activity=lambda kind, text: rows.append((kind, text)),
-            on_failed=failures.append,
-            on_complete=completed.append,
+        callbacks=TurnCallbacks(
+            **_callbacks(
+                on_activity=lambda kind, text: rows.append((kind, text)),
+                on_failed=failures.append,
+                on_complete=completed.append,
+            )
         ),
     )
     # 20 progress frames at half a clock-second each crosses the 5s
@@ -200,7 +207,9 @@ def test_a_prompt_is_not_sent_after_the_turn_has_ended():
         None,
         ".",
         "default",
-        **_callbacks(on_complete=completed.append, on_failed=failures.append),
+        callbacks=TurnCallbacks(
+            **_callbacks(on_complete=completed.append, on_failed=failures.append)
+        ),
     )
     worker._ended = True
     calls: list[str] = []
@@ -222,7 +231,7 @@ def test_a_slash_check_that_ends_the_turn_does_not_send_the_prompt():
         None,
         ".",
         "default",
-        **_callbacks(on_complete=completed.append),
+        callbacks=TurnCallbacks(**_callbacks(on_complete=completed.append)),
     )
     worker._transport = _ScriptedTransport(
         [_event("message.complete", {"status": "complete", "text": "the answer"})]
@@ -245,7 +254,9 @@ def test_compaction_is_not_started_after_the_turn_has_ended():
         ".",
         "default",
         compact=True,
-        **_callbacks(on_complete=completed.append, on_failed=failures.append),
+        callbacks=TurnCallbacks(
+            **_callbacks(on_complete=completed.append, on_failed=failures.append)
+        ),
     )
     worker._ended = True
     calls: list[str] = []
@@ -267,7 +278,9 @@ def test_a_completion_after_the_turn_ended_is_not_announced_again():
             None,
             ".",
             "default",
-            **_callbacks(on_complete=completed.append, on_failed=failures.append),
+            callbacks=TurnCallbacks(
+                **_callbacks(on_complete=completed.append, on_failed=failures.append)
+            ),
         )
         setattr(worker, flag, True)
 
@@ -281,7 +294,12 @@ def test_a_completion_after_the_turn_ended_is_not_announced_again():
 def test_a_replay_is_not_reopened_after_the_turn_has_ended():
     failures: list[str] = []
     worker = HermesWorker(
-        "", "sess-9", ".", "default", resume_only=True, **_callbacks(on_failed=failures.append)
+        "",
+        "sess-9",
+        ".",
+        "default",
+        resume_only=True,
+        callbacks=TurnCallbacks(**_callbacks(on_failed=failures.append)),
     )
     worker._ended = True
     calls: list[str] = []
@@ -295,7 +313,9 @@ def test_a_replay_is_not_reopened_after_the_turn_has_ended():
 
 def test_a_session_is_not_created_after_the_turn_has_ended():
     failures: list[str] = []
-    worker = HermesWorker("hi", None, ".", "default", **_callbacks(on_failed=failures.append))
+    worker = HermesWorker(
+        "hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(on_failed=failures.append))
+    )
     worker._ended = True
     calls: list[str] = []
     worker._call = lambda *args, **_kwargs: calls.append(args[0]) or {}
@@ -341,7 +361,9 @@ def test_a_turn_cancelled_during_the_capability_wait_sends_no_session():
     going to talk to.
     """
     failures: list[str] = []
-    worker = HermesWorker("hi", None, ".", "default", **_callbacks(on_failed=failures.append))
+    worker = HermesWorker(
+        "hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(on_failed=failures.append))
+    )
     transport = _CancelOnEmptyRead([_event("gateway.ready", {})], worker)
     worker._transport = transport
     worker._open_transport = lambda: True
@@ -363,7 +385,12 @@ def test_a_turn_cancelled_during_the_model_switch_sends_no_prompt():
 
     failures: list[str] = []
     worker = HermesWorker(
-        "hi", None, ".", "default", model="picked-model", **_callbacks(on_failed=failures.append)
+        "hi",
+        None,
+        ".",
+        "default",
+        model="picked-model",
+        callbacks=TurnCallbacks(**_callbacks(on_failed=failures.append)),
     )
     transport = _CancelOnEmptyRead(
         [{"jsonrpc": "2.0", "id": 999, "result": {}}],  # keeps the held connection "connected"
@@ -387,7 +414,13 @@ def test_a_turn_cancelled_during_the_slash_check_sends_no_prompt():
     cancelled message into a live turn nobody reads.
     """
     failures: list[str] = []
-    worker = HermesWorker("/compact", None, ".", "default", **_callbacks(on_failed=failures.append))
+    worker = HermesWorker(
+        "/compact",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(**_callbacks(on_failed=failures.append)),
+    )
     transport = _CancelOnEmptyRead([], worker)
     worker._transport = transport
     calls: list[str] = []
@@ -421,9 +454,11 @@ def test_a_stop_inside_a_token_at_the_buffer_edge_waits_for_the_next_delta():
         None,
         ".",
         "default",
-        **_callbacks(
-            on_activity=lambda kind, text: rows.append((kind, text)),
-            on_complete=completed.append,
+        callbacks=TurnCallbacks(
+            **_callbacks(
+                on_activity=lambda kind, text: rows.append((kind, text)),
+                on_complete=completed.append,
+            )
         ),
     )
     worker._transport = _ScriptedTransport(

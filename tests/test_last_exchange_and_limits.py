@@ -12,6 +12,7 @@ import time
 import pytest
 
 import agent_backends
+import backend_probes
 import blindpilot_app
 from session_history import HistoryEntry, HistoryTurn
 
@@ -70,7 +71,7 @@ def test_the_box_follows_the_selection_and_ignores_a_late_answer(frame, monkeypa
 
 @pytest.fixture
 def fresh(monkeypatch):
-    monkeypatch.setattr(agent_backends, "_CLAUDE_LIMITS_SAID", set())
+    monkeypatch.setattr(backend_probes, "_CLAUDE_LIMITS_SAID", set())
 
 
 INFO = {

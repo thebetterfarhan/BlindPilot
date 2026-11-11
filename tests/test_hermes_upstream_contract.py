@@ -16,7 +16,9 @@ SPDX-License-Identifier: MIT
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
+import dataclasses
 import inspect
 
 import agent_backends
@@ -56,18 +58,23 @@ def test_hermes_worker_accepts_every_callback_the_window_passes() -> None:
         None,
         ".",
         "auto",
-        on_session=_noop,
-        on_started=_noop,
-        on_activity=_noop,
-        on_complete=_noop,
-        on_failed=_noop,
-        on_done=_noop,
-        on_question=_noop,
+        callbacks=TurnCallbacks(
+            on_session=_noop,
+            on_started=_noop,
+            on_activity=_noop,
+            on_complete=_noop,
+            on_failed=_noop,
+            on_done=_noop,
+            on_question=_noop,
+        ),
     )
-    accepted = set(inspect.signature(HermesWorker.__init__).parameters)
     assert worker is not None
+    assert "callbacks" in inspect.signature(HermesWorker.__init__).parameters, (
+        "HermesWorker does not accept `callbacks`"
+    )
+    carried = {field.name for field in dataclasses.fields(TurnCallbacks)}
     for name in _WINDOW_CALLBACKS:
-        assert name in accepted, f"HermesWorker does not accept {name}"
+        assert name in carried, f"TurnCallbacks does not carry {name}"
 
 
 def test_every_worker_accepts_the_same_window_callbacks() -> None:

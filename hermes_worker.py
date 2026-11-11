@@ -16,19 +16,19 @@ import json
 import mimetypes
 import os
 import re
-import threading
 import time
 from typing import Callable, Optional, Sequence
 
 from agent_backends import (
+    BACKEND_HERMES,
     SUBAGENT_COMPLETED,
     SUBAGENT_RUNNING,
-    SubagentReport,
+    TurnCallbacks,
+    _TurnWorker,
     subagent_line,
     subagent_status,
 )
 from questions import (
-    AskQuestions,
     Question,
     QuestionOption,
     question_summary,
@@ -506,12 +506,14 @@ class HeldConnection:
             transport.close()
 
 
-class HermesWorker(JsonRpcCalls, threading.Thread):
+class HermesWorker(JsonRpcCalls, _TurnWorker):
     """Run one Hermes turn, reporting it through BlindPilot's callbacks.
 
     The signature matches the other backends' workers so the window can hold
     whichever one the user picked without knowing which it is.
     """
+
+    _backend = BACKEND_HERMES
 
     def __init__(
         self,
@@ -523,39 +525,30 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         model: str = "",
         effort: str = "",
         compact: bool = False,
+        attachments: Optional[Sequence[str]] = None,
+        callbacks: TurnCallbacks,
         remote_url: str = "",
         remote_token: str = "",
         remote_credential: str = "token",
         remote_username: str = "",
         held: Optional[HeldConnection] = None,
-        attachments: Optional[Sequence[str]] = None,
         resume_only: bool = False,
         session_title: str = "",
-        on_session: Callable[[str], None],
-        on_started: Callable[[], None],
-        on_activity: Callable[[str, str], None],
-        on_complete: Callable[[str], None],
-        on_failed: Callable[[str], None],
-        on_done: Callable[[], None],
-        # Answers Hermes' clarify, sudo and secret requests, each of which
-        # blocks the agent until a reply arrives.
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
     ) -> None:
-        super().__init__(daemon=True)
-        self._prompt = prompt
-        self._session_id = session_id
-        self._cwd = cwd
-        self._permission_mode = permission_mode
-        self._model = model
-        # A per-session override on session.create. It changes this
-        # conversation only, never the profile's own setting.
-        self._effort = effort
+        super().__init__(
+            prompt,
+            session_id,
+            cwd,
+            permission_mode,
+            model=model,
+            effort=effort,
+            compact=compact,
+            attachments=tuple(a for a in (attachments or []) if str(a).strip()),
+            callbacks=callbacks,
+        )
         # A name typed in the New Session dialog, sent on session.create only.
         # Empty means "let Hermes name it from the first message".
         self._session_title = (session_title or "").strip()
-        self._compact = compact
         self._remote_url = remote_url
         self._remote_token = remote_token
         # Which credential name the remote server expects: its session token,
@@ -574,40 +567,37 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         # sending anything. The window uses this to open a past conversation
         # -- including one that is running right now on the gateway.
         self._resume_only = resume_only
+
+    def _setup(self) -> None:
         # Files the user attached to this message. They live on the machine
         # BlindPilot runs on, which is not necessarily the machine Hermes runs
         # on, so their bytes are uploaded before the prompt goes out.
-        self._attachments = [str(p) for p in (attachments or []) if str(p).strip()]
+        # (attachments list already stored by _TurnWorker as self._attachments)
         # Whether this turn inherited a live connection rather than opening one.
         self._reused = False
-        self._on_session = on_session
-        self._on_started = on_started
         # Counted, not just called: the turn loop needs to know whether a frame
         # produced anything a listener would hear, so that housekeeping traffic
         # cannot pass for progress. Wrapping the callbacks keeps that count in
         # ONE place -- a new call site added later is counted automatically,
         # where a hand-maintained flag would quietly stop being accurate.
         self._rows_emitted = 0
+        _base_on_activity = self._on_activity
+        _base_on_complete = self._on_complete
+        _base_on_subagent = self._on_subagent
 
         def counted_activity(kind: str, text: str) -> None:
             self._rows_emitted += 1
-            on_activity(kind, text)
+            _base_on_activity(kind, text)
 
         def counted_complete(text: str) -> None:
             self._rows_emitted += 1
-            on_complete(text)
+            _base_on_complete(text)
 
         self._on_activity = counted_activity
         # Uncounted: a marker between rows, not something a listener hears.
-        self._mark = on_activity
+        self._mark = _base_on_activity
+
         self._on_complete = counted_complete
-        self._on_failed = on_failed
-        self._on_done = on_done
-        # Called by the clarify and secret handlers; None means answer empty.
-        self._on_question = on_question
-        # Not yet wired to a Hermes approval request; accepted for parity
-        # with the upstream workers so the contract test holds.
-        self._on_permission = on_permission
 
         # Counted like the rows above: a delegate-only stream whose frames
         # never bumped the count tripped the silence diagnosis and the idle
@@ -615,8 +605,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         # the window ignores subagent rows -- the turn is still working.
         def counted_subagent(agent_id: str, goal: str, status: str, line: str) -> None:
             self._rows_emitted += 1
-            if on_subagent is not None:
-                on_subagent(agent_id, goal, status, line)
+            _base_on_subagent(agent_id, goal, status, line)
 
         self._on_subagent = counted_subagent
         # delegate_task children this turn has heard of, by subagent id, with
@@ -624,7 +613,6 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         # so Stop interrupts each one still running by name.
         self._subagents: dict[str, str] = {}
         self._transport: Optional[Transport] = None
-        self._cancelled = False
         # Set when the turn's end arrives while a reply is still awaited, so
         # the caller waiting on that reply does not report a second ending.
         self._ended = False
@@ -634,8 +622,7 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         self._clean_end = False
         # The picker row the live session is known to run; see HeldConnection.
         self._session_model = ""
-        self._accepting_input = threading.Event()
-        self._gateway_session = session_id or ""
+        self._gateway_session = self._session_id or ""
         # The per-process session id Hermes addresses turns with. Distinct from
         # the stored id above, which is what survives a restart.
         self._live_session = ""
@@ -724,43 +711,42 @@ class HermesWorker(JsonRpcCalls, threading.Thread):
         if transport is not None and not self.is_alive():
             transport.close()
 
-    def run(self) -> None:
-        try:
-            self._do_run()
-        except Exception as exc:
-            # A crash has to be said, not silent: the shared turn
-            # scaffold reports one, and a screen reader left with
-            # nothing announced is the worst outcome there is. But a
-            # turn that already ended -- cleanly or with its ending
-            # already reported -- must not be announced as failed
-            # because the completion callback raised.
-            if not self._clean_end and not self._ended:
-                self._on_failed(f"Hermes turn failed: {exc}")
-        finally:
-            self._accepting_input.clear()
-            transport = self._transport
-            # Hand the connection back for the next turn instead of closing it,
-            # unless the turn was cancelled, ended abnormally, or the
-            # connection did not survive.
-            keep = (
-                self._held is not None
-                and not self._cancelled
-                and self._clean_end
-                and transport is not None
-                and transport.connected()
-                and bool(self._live_session)
-            )
-            if keep:
-                self._held.keep(transport, self._live_session, self._session_model)  # type: ignore[union-attr]
-                if self._cancelled:
-                    # cancel() ran between the check above and the hand-over
-                    # and left the close to this thread.
-                    self._held.drop()  # type: ignore[union-attr]
-            elif transport is not None:
-                transport.close()
-                if self._held is not None:
-                    self._held.keep(None, "")
-            self._on_done()
+    def _fail(self, message: str) -> None:
+        """Report a turn failure, once.
+
+        HermesWorker tracks once-ness through ``_ended``/``_clean_end``; keep
+        ``_settled`` in sync so any future base-class check sees the right state.
+        """
+        if self._clean_end or self._ended:
+            return
+        self._ended = True
+        self._settled.set()
+        self._on_failed(message)
+
+    def _teardown(self) -> None:
+        """Hand the connection back or close it, however the turn ended."""
+        transport = self._transport
+        # Hand the connection back for the next turn instead of closing it,
+        # unless the turn was cancelled, ended abnormally, or the
+        # connection did not survive.
+        keep = (
+            self._held is not None
+            and not self._cancelled
+            and self._clean_end
+            and transport is not None
+            and transport.connected()
+            and bool(self._live_session)
+        )
+        if keep:
+            self._held.keep(transport, self._live_session, self._session_model)  # type: ignore[union-attr]
+            if self._cancelled:
+                # cancel() ran between the check above and the hand-over
+                # and left the close to this thread.
+                self._held.drop()  # type: ignore[union-attr]
+        elif transport is not None:
+            transport.close()
+            if self._held is not None:
+                self._held.keep(None, "")
 
     # -- protocol plumbing -------------------------------------------------
 

@@ -14,6 +14,8 @@ that the Protocol was short.
 
 from __future__ import annotations
 
+import inspect
+
 import agent_backends
 from commandcode_worker import CommandcodeWorker
 from claude_worker import ClaudeWorker
@@ -62,3 +64,38 @@ def test_the_window_only_calls_what_the_protocol_promises():
     asked to do that thing."""
     for name in ("start", "is_alive", "join", "cancel", "steer"):
         assert hasattr(agent_backends.AgentWorker, name), f"AgentWorker is missing {name}"
+
+
+def test_every_worker_accepts_callbacks():
+    """Construction signatures are identical: every worker takes `callbacks`.
+
+    Adding a new callback costs one field on TurnCallbacks — no grep-and-replace
+    across call sites. A worker that accepts the nine callbacks as separate kwargs
+    instead breaks that contract silently; this test catches it at import time.
+
+    Workers that forward via *args/**kwargs (e.g. _GoogleTurnWorker subclasses)
+    satisfy the contract through their base class; the test walks the MRO to
+    find the defining `__init__` and checks there.
+    """
+    for worker in WORKERS:
+        # Find the class in the MRO that owns the defining __init__.
+        defining_class = next(
+            (c for c in worker.__mro__ if "__init__" in c.__dict__),
+            worker,
+        )
+        sig = inspect.signature(defining_class.__init__)
+        # A *args/**kwargs forwarder is accepted: `callbacks` will be passed
+        # through to the base class that actually names it.
+        forwards = any(
+            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            for p in sig.parameters.values()
+        )
+        if not forwards:
+            assert "callbacks" in sig.parameters, (
+                f"{worker.__name__} does not accept `callbacks`; "
+                "add `callbacks: TurnCallbacks` and remove any individual callback kwargs"
+            )
+            param = sig.parameters["callbacks"]
+            assert param.annotation is not inspect.Parameter.empty, (
+                f"{worker.__name__}.callbacks has no type annotation"
+            )

@@ -12,6 +12,7 @@ contract the real ``StdioTransport`` answers to.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import threading
@@ -135,7 +136,9 @@ def test_a_full_turn_streams_the_answer_and_completes(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("say hello", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "say hello", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -175,7 +178,9 @@ def test_provider_402_fails_instead_of_waiting_for_muses_retry_backoff(monkeypat
         ),
     )
     recorder = _Recorder()
-    worker = MuseWorker("say hello", None, ".", "default", **recorder.callbacks())
+    worker = MuseWorker(
+        "say hello", None, ".", "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -190,7 +195,7 @@ def test_the_client_introduces_itself_with_a_protocol_valid_name(monkeypatch):
     # name is answered invalidParams and the host never talks to this client.
     transport = _with_script(monkeypatch, [_init_reply(101)])
     recorder = _Recorder()
-    worker = MuseWorker("x", None, ".", "default", **recorder.callbacks())
+    worker = MuseWorker("x", None, ".", "default", callbacks=TurnCallbacks(**recorder.callbacks()))
 
     _run(worker)
 
@@ -237,7 +242,9 @@ def test_permission_modes_map_onto_the_protocol_vocabulary(monkeypatch):
             ],
         )
         recorder = _Recorder()
-        worker = MuseWorker("x", None, ".", window_mode, **recorder.callbacks())
+        worker = MuseWorker(
+            "x", None, ".", window_mode, callbacks=TurnCallbacks(**recorder.callbacks())
+        )
         worker._transport = transport
         # The handshake hands out request id 101; without it the session/start
         # below would be answered by the wrong frame of the script.
@@ -266,7 +273,9 @@ def test_streaming_frames_that_arrive_early_are_not_lost(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -287,7 +296,9 @@ def test_a_failed_turn_reports_what_the_server_said(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -304,7 +315,9 @@ def test_a_cancelled_turn_says_so_instead_of_passing_for_an_answer(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -313,7 +326,9 @@ def test_a_cancelled_turn_says_so_instead_of_passing_for_an_answer(monkeypatch):
 
 def test_an_empty_prompt_is_refused_rather_than_sent():
     recorder = _Recorder()
-    worker = MuseWorker("   ", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "   ", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker._live_session = "sess-1"
     worker._transport = _ScriptedMuseTransport(stays_open=True)
 
@@ -328,7 +343,9 @@ def test_a_host_that_refuses_the_session_is_reported(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -341,7 +358,9 @@ def test_a_host_that_refuses_the_session_is_reported(monkeypatch):
 
 
 def test_steering_sends_the_guidance_with_the_ids_that_name_the_turn():
-    worker = MuseWorker("go", "sess-1", ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
     transport = _ScriptedMuseTransport(stays_open=True)
     worker._transport = transport
     worker._live_session = "sess-1"
@@ -357,7 +376,9 @@ def test_steering_sends_the_guidance_with_the_ids_that_name_the_turn():
 
 
 def test_steering_is_refused_before_a_turn_exists():
-    worker = MuseWorker("go", "sess-1", ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
     worker._transport = _ScriptedMuseTransport(stays_open=True)
 
     assert worker.steer("too early") is False
@@ -367,7 +388,9 @@ def test_cancelling_sends_the_interrupt_with_a_command_id():
     # turn/interrupt is the "user pressed stop" gesture on the priority lane;
     # turn/cancel is the plain lane. Both end the turn as cancelled (measured
     # 1.4.0, mid-stream and before the first token alike).
-    worker = MuseWorker("go", "sess-1", ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
     transport = _ScriptedMuseTransport(stays_open=True)
     worker._transport = transport
     worker._live_session = "sess-1"
@@ -435,8 +458,10 @@ def test_bypass_auto_approves_without_asking(monkeypatch):
         None,
         ".",
         "bypassPermissions",
-        on_question=lambda questions: asked.append(questions) or [["Deny"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions) or [["Deny"]],
+            **_Recorder().callbacks(),
+        ),
     )
 
     _run(worker)
@@ -459,8 +484,7 @@ def test_a_cancel_arriving_during_an_approval_denies_it_rather_than_resuming_wor
         None,
         ".",
         "default",
-        on_question=cancel_then_answer,
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(on_question=cancel_then_answer, **_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -499,8 +523,9 @@ def test_an_approval_is_answered_with_the_choice_and_the_requirement_carried_thr
         None,
         ".",
         "default",
-        on_question=lambda questions: [["Approve"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["Approve"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -515,7 +540,9 @@ def test_an_approval_nobody_is_here_to_answer_is_denied(monkeypatch):
     # Leaving the run wedged on an approval nobody can see is the one outcome
     # worse than refusing it.
     transport = _approval_turn(monkeypatch, {"availableChoices": _approval_choices()})
-    worker = MuseWorker("go", None, ".", "default", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "default", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -530,8 +557,9 @@ def test_an_approval_for_the_session_maps_to_the_session_choice(monkeypatch):
         None,
         ".",
         "default",
-        on_question=lambda questions: [["Approve for session"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["Approve for session"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -562,8 +590,10 @@ def test_the_menu_is_the_servers_own_choices_and_reject_is_the_refusal(monkeypat
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions) or [["Something else"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions) or [["Something else"]],
+            **_Recorder().callbacks(),
+        ),
     )
 
     _run(worker)
@@ -579,7 +609,9 @@ def test_fired_commands_carry_an_id_but_initialized_does_not(monkeypatch):
     # silently and the turn hangs; an initialized WITH an id is answered "Not
     # initialized" and every later request is refused.
     transport = _approval_turn(monkeypatch, {"availableChoices": _approval_choices()})
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -597,7 +629,7 @@ def test_a_refused_fired_command_is_said_not_swallowed(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "default", **recorder.callbacks())
+    worker = MuseWorker("go", None, ".", "default", callbacks=TurnCallbacks(**recorder.callbacks()))
 
     _run(worker)
 
@@ -612,7 +644,9 @@ def test_fired_commands_are_capped_when_the_server_never_answers():
     command for the life of the turn.
     """
     transport = _ScriptedMuseTransport(stays_open=True)
-    worker = MuseWorker("go", None, ".", "default", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "default", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
     worker._transport = transport
 
     for _ in range(muse_worker._FIRED_KEEP + 5):
@@ -632,7 +666,9 @@ def test_an_internal_decide_failure_is_resent_once_with_the_same_command(monkeyp
         {"jsonrpc": "2.0", "id": 105, "error": internal},
     ]
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -678,7 +714,9 @@ def test_the_reasoning_summary_is_thinking_not_the_answer(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -710,12 +748,14 @@ def test_a_completion_callback_that_raises_is_not_announced_as_a_failed_turn(mon
         None,
         ".",
         "bypassPermissions",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda _kind, _text: None,
-        on_complete=boom,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda _kind, _text: None,
+            on_complete=boom,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
 
     _run(worker)
@@ -759,7 +799,9 @@ def test_a_completed_message_is_not_spoken_twice_and_earlier_ones_are_kept(monke
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -798,8 +840,9 @@ def test_a_mid_run_question_is_answered_with_the_picked_label(monkeypatch):
         None,
         ".",
         "bypassPermissions",
-        on_question=lambda questions: [["SQLite"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["SQLite"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -849,8 +892,9 @@ def test_a_request_from_the_host_gets_its_presentation_receipt(monkeypatch):
         None,
         ".",
         "bypassPermissions",
-        on_question=lambda questions: [["SQLite"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["SQLite"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -868,8 +912,9 @@ def test_a_typed_answer_goes_as_free_text_not_as_a_label(monkeypatch):
         None,
         ".",
         "bypassPermissions",
-        on_question=lambda questions: [["DuckDB, please"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["DuckDB, please"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -887,8 +932,7 @@ def test_a_closed_question_dialog_cancels_rather_than_sending_a_blank(monkeypatc
         None,
         ".",
         "bypassPermissions",
-        on_question=lambda questions: None,
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(on_question=lambda questions: None, **_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -914,7 +958,9 @@ def test_a_question_nobody_is_here_to_answer_is_cancelled_not_dropped(monkeypatc
         {"jsonrpc": "2.0", "method": "turn/completed", "params": {"terminal": "completed"}},
     ]
     transport = _with_script(monkeypatch, frames)
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -941,7 +987,14 @@ def test_compaction_waits_for_the_summary_item(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("", None, ".", "bypassPermissions", compact=True, **recorder.callbacks())
+    worker = MuseWorker(
+        "",
+        None,
+        ".",
+        "bypassPermissions",
+        compact=True,
+        callbacks=TurnCallbacks(**recorder.callbacks()),
+    )
 
     _run(worker)
 
@@ -969,7 +1022,12 @@ def test_a_resume_only_turn_replays_the_stored_transcript(monkeypatch):
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
     worker = MuseWorker(
-        "", "sess-9", ".", "bypassPermissions", resume_only=True, **recorder.callbacks()
+        "",
+        "sess-9",
+        ".",
+        "bypassPermissions",
+        resume_only=True,
+        callbacks=TurnCallbacks(**recorder.callbacks()),
     )
 
     _run(worker)
@@ -995,13 +1053,15 @@ def _boom_worker(monkeypatch, frames, session=None, **kwargs):
         session,
         ".",
         "bypassPermissions",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=boom,
-        on_failed=failures.append,
-        on_done=lambda: None,
         **kwargs,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=boom,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     _run(worker)
     return completed, failures
@@ -1106,7 +1166,14 @@ def test_the_scripted_transport_ends_like_a_pipe():
 def test_turn_kinds_are_declared_up_front(worker_args, expected):
     """The flags the window passes reach the turn loop as its own vocabulary."""
     recorder = _Recorder()
-    worker = MuseWorker("", None, ".", "bypassPermissions", **worker_args, **recorder.callbacks())
+    worker = MuseWorker(
+        "",
+        None,
+        ".",
+        "bypassPermissions",
+        **worker_args,
+        callbacks=TurnCallbacks(**recorder.callbacks()),
+    )
     if "compact" in worker_args:
         assert worker._compact is expected
     elif "resume_only" in worker_args:
@@ -1142,7 +1209,9 @@ def test_each_stage_of_a_piped_command_is_answered_once(monkeypatch):
         {"jsonrpc": "2.0", "method": "turn/completed", "params": {"terminal": "completed"}},
     ]
     transport = _with_script(monkeypatch, frames)
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -1170,7 +1239,12 @@ def test_a_model_picked_for_a_reopened_conversation_is_applied(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     worker = MuseWorker(
-        "go", "sess-1", ".", "default", model="muse-spark-1.3", **_Recorder().callbacks()
+        "go",
+        "sess-1",
+        ".",
+        "default",
+        model="muse-spark-1.3",
+        callbacks=TurnCallbacks(**_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -1203,7 +1277,9 @@ def test_tool_rows_name_what_search_and_todos_are_about(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1242,7 +1318,9 @@ def test_a_mode_picked_mid_conversation_reaches_the_resumed_session(monkeypatch)
         {"approvalMode": {"mode": "denyUnmatched"}},
         {"approvals": [], "userInputs": []},
     )
-    worker = MuseWorker("go", "sess-1", ".", "default", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "default", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -1268,7 +1346,9 @@ def test_a_session_already_on_the_picked_mode_is_left_alone(monkeypatch):
         {"jsonrpc": "2.0", "method": "turn/completed", "params": {"terminal": "completed"}},
     ]
     transport = _with_script(monkeypatch, frames)
-    worker = MuseWorker("go", "sess-1", ".", "default", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "default", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -1292,7 +1372,9 @@ def test_a_refused_mode_switch_is_said_not_fatal(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", "sess-1", ".", "default", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", "sess-1", ".", "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1323,8 +1405,9 @@ def test_a_parked_approval_is_answered_when_the_conversation_reopens(monkeypatch
         "sess-1",
         ".",
         "default",
-        on_question=lambda questions: [["Approve"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["Approve"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -1361,8 +1444,9 @@ def test_a_parked_question_is_answered_when_the_conversation_reopens(monkeypatch
         "sess-1",
         ".",
         "default",
-        on_question=lambda questions: [["SQLite"]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: [["SQLite"]], **_Recorder().callbacks()
+        ),
     )
 
     _run(worker)
@@ -1445,8 +1529,12 @@ def test_a_request_and_its_notification_twin_ask_only_once(monkeypatch):
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions) or [[questions[0].options[0].label]],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: (
+                asked.append(questions) or [[questions[0].options[0].label]]
+            ),
+            **_Recorder().callbacks(),
+        ),
     )
 
     _run(worker)
@@ -1479,7 +1567,7 @@ def test_an_attached_image_travels_as_a_part_the_model_sees(monkeypatch, tmp_pat
         ".",
         "bypassPermissions",
         attachments=[str(picture)],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(**_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -1510,7 +1598,7 @@ def test_an_attached_document_is_named_in_the_text(monkeypatch, tmp_path):
         ".",
         "bypassPermissions",
         attachments=[str(note)],
-        **_Recorder().callbacks(),
+        callbacks=TurnCallbacks(**_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -1541,7 +1629,11 @@ def test_a_skill_the_cli_knows_is_invoked_as_a_skill_part(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     worker = MuseWorker(
-        "/doctor what is slow", None, ".", "bypassPermissions", **_Recorder().callbacks()
+        "/doctor what is slow",
+        None,
+        ".",
+        "bypassPermissions",
+        callbacks=TurnCallbacks(**_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -1564,7 +1656,11 @@ def test_a_slash_that_is_not_a_skill_stays_plain_text(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     worker = MuseWorker(
-        "/tmp/notes say hi", None, ".", "bypassPermissions", **_Recorder().callbacks()
+        "/tmp/notes say hi",
+        None,
+        ".",
+        "bypassPermissions",
+        callbacks=TurnCallbacks(**_Recorder().callbacks()),
     )
 
     _run(worker)
@@ -1603,7 +1699,9 @@ def test_backgrounded_and_delegated_work_is_said(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1627,7 +1725,9 @@ def test_retries_and_mode_changes_are_said(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1653,7 +1753,9 @@ def test_the_turn_stashes_what_the_host_observed_of_the_subscription(monkeypatch
     ]
     _with_script(monkeypatch, frames)
     monkeypatch.setattr(muse_backend, "_usage_payload", None)
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **_Recorder().callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**_Recorder().callbacks())
+    )
 
     _run(worker)
 
@@ -1695,7 +1797,9 @@ def test_a_truncated_tool_result_is_fetched_back_whole(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1740,7 +1844,9 @@ def test_a_binary_tool_result_is_decoded_from_base64(monkeypatch):
     ]
     _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1784,7 +1890,9 @@ def test_an_untruncated_or_unservable_result_keeps_its_text(monkeypatch):
     ]
     transport = _with_script(monkeypatch, frames)
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1831,7 +1939,9 @@ def test_a_truncated_answer_is_completed_from_the_session_log(monkeypatch):
         lambda _text: [("go", "Hello there. And then some more.")],
     )
     recorder = _Recorder()
-    worker = MuseWorker("go", None, ".", "bypassPermissions", **recorder.callbacks())
+    worker = MuseWorker(
+        "go", None, ".", "bypassPermissions", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
 
     _run(worker)
 
@@ -1872,7 +1982,12 @@ def test_a_replay_pages_the_view_when_history_is_not_inline(monkeypatch):
     transport = _with_script(monkeypatch, frames)
     recorder = _Recorder()
     worker = MuseWorker(
-        "", "sess-9", ".", "bypassPermissions", resume_only=True, **recorder.callbacks()
+        "",
+        "sess-9",
+        ".",
+        "bypassPermissions",
+        resume_only=True,
+        callbacks=TurnCallbacks(**recorder.callbacks()),
     )
 
     _run(worker)

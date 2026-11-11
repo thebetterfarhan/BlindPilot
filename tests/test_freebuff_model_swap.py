@@ -16,9 +16,11 @@ hourly cut-off.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_terminal
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 # An already-expanded picker, as 0.0.168 opens on: there is no "See all models"
 # entry to walk through first, so the swap is reached on the first frame that
@@ -62,12 +64,14 @@ def test_a_model_the_picker_dropped_is_announced_as_a_notice(monkeypatch):
         ".",
         "default",
         model="gone/model-that-freebuff-dropped",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
     state = {"sent": False, "enters": 0, "phase": 0}
 
@@ -89,18 +93,18 @@ def test_a_model_the_picker_dropped_is_announced_as_a_notice(monkeypatch):
 
         return read
 
-    monkeypatch.setattr(agent_backends, "_freebuff_prewarm", None)
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_prewarm", None)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (["z-ai/glm-5.3-flash"], "z-ai/glm-5.3-flash", ""),
     )
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
-    monkeypatch.setattr(agent_backends, "_freebuff_boot_ready", lambda *_a: True)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_PICKER_PATIENCE_SECONDS", 0.05)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_worker, "_freebuff_boot_ready", lambda *_a: True)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_PICKER_PATIENCE_SECONDS", 0.05)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
     worker._write = write
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
 

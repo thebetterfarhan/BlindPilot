@@ -22,8 +22,8 @@ BlindPilot hands neither of them an API key; keys are Chat mode's. Whatever a
 person configured in a CLI themselves is left for that CLI to use. The turns
 themselves are in ``google_worker``.
 
-CLI probes go through ``agent_backends._probe_backend`` and discovery through
-``agent_backends.find_backend_cli``, resolved at call time, so the suite's
+CLI probes go through ``backend_probes._probe_backend`` and discovery through
+``backend_probes.find_backend_cli``, resolved at call time, so the suite's
 "every backend" tests fence this adapter off from the machine like the others.
 
 Copyright (c) 2026 doubletaponair and BlindPilot contributors.
@@ -39,7 +39,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-import agent_backends
+import backend_probes
 from agent_backends import BACKEND_ANTIGRAVITY, BACKEND_GEMINI
 
 # Gemini CLI's own names for its models. "auto" lets the CLI route each request
@@ -124,7 +124,7 @@ def gemini_google_account() -> str:
 
 
 def _probe(binary: str, args: list[str], timeout: int) -> tuple[Optional[int], str]:
-    return agent_backends._probe_backend(binary, args, timeout)
+    return backend_probes._probe_backend(binary, args, timeout)
 
 
 def gemini_auth_ok() -> bool:
@@ -151,7 +151,7 @@ def antigravity_models(timeout: int = CLI_PROBE_TIMEOUT) -> tuple[list[tuple[str
     "Please sign in to view available models", so the text is read, not the
     exit code.
     """
-    binary = agent_backends.find_backend_cli(BACKEND_ANTIGRAVITY)
+    binary = backend_probes.find_backend_cli(BACKEND_ANTIGRAVITY)
     if not binary:
         return [], "Antigravity CLI was not found."
     code, text = _probe(binary, ["models"], timeout)
@@ -209,7 +209,7 @@ def antigravity_account_lines() -> list[str]:
 
 def gemini_model_options() -> tuple[list[str], list[str], str, str, str]:
     """The picker's answer: (models, efforts, current model, current effort, error)."""
-    if agent_backends.find_backend_cli(BACKEND_GEMINI) is None:
+    if backend_probes.find_backend_cli(BACKEND_GEMINI) is None:
         return [], [], "", "", "Gemini CLI was not found."
     models = list(GEMINI_CLI_ALIASES)
     current = gemini_configured_model() or "auto"
@@ -220,7 +220,7 @@ def gemini_model_options() -> tuple[list[str], list[str], str, str, str]:
 
 def antigravity_model_options() -> tuple[list[str], list[str], str, str, str]:
     """The picker's answer: (models, efforts, current model, current effort, error)."""
-    if agent_backends.find_backend_cli(BACKEND_ANTIGRAVITY) is None:
+    if backend_probes.find_backend_cli(BACKEND_ANTIGRAVITY) is None:
         return [], [], "", "", "Antigravity CLI was not found."
     pairs, complaint = antigravity_models()
     if not pairs:

@@ -6,6 +6,7 @@ stopped, and all BlindPilot could say was that Claude Code had exited.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import io
 import os
@@ -148,12 +149,14 @@ def _drive(proc, on_activity=None, timeout=10.0, on_worker=None, prompt="hi"):
             None,
             os.getcwd(),
             "default",
-            on_session=lambda _sid: None,
-            on_started=lambda: None,
-            on_activity=record,
-            on_complete=completed.append,
-            on_failed=failures.append,
-            on_done=lambda: None,
+            callbacks=TurnCallbacks(
+                on_session=lambda _sid: None,
+                on_started=lambda: None,
+                on_activity=record,
+                on_complete=completed.append,
+                on_failed=failures.append,
+                on_done=lambda: None,
+            ),
         )
         if on_worker is not None:
             on_worker(worker)

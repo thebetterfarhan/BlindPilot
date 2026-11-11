@@ -21,7 +21,6 @@ from __future__ import annotations
 import functools
 import logging
 import queue
-import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -31,10 +30,10 @@ from agent_backends import (
     SUBAGENT_COMPLETED,
     SUBAGENT_FAILED,
     SUBAGENT_RUNNING,
-    SubagentReport,
+    TurnCallbacks,
+    _TurnWorker,
     _tool_use_label,
     claude_limit_warning,
-    ignore_subagents,
     subagent_line,
     subagent_status,
 )
@@ -44,7 +43,7 @@ from claude_session import _find_claude
 import diagnostics
 from markdown_rows import SentenceStreamer
 from process_utils import no_window_kwargs
-from questions import AskQuestions, Question, _questions, question_summary
+from questions import Question, _questions, question_summary
 import remote_sessions
 from task_list import CLAUDE_TASK_TOOLS
 
@@ -165,12 +164,14 @@ _CANCEL_DRAIN_SECONDS = 5.0
 _CANCEL_WAKE = {"type": "cancel_wake"}
 
 
-class ClaudeWorker(threading.Thread):
+class ClaudeWorker(_TurnWorker):
     """Runs one Claude turn on the tab's held process and reports it back.
 
     All callbacks are invoked from this worker thread; the caller is
     responsible for marshalling them back to the GUI thread (wx.CallAfter).
     """
+
+    _backend = BACKEND_CLAUDE
 
     # Stop may wait for the CLI to confirm the interrupt and then for the
     # interrupted turn's result, so the panel must wait longer than both
@@ -189,65 +190,39 @@ class ClaudeWorker(threading.Thread):
         *,
         model: str = "",
         effort: str = "",
-        on_session: Callable[[str], None],
-        on_started: Callable[[], None],
-        on_activity: Callable[[str, str], None],
-        on_complete: Callable[[str], None],
-        on_failed: Callable[[str], None],
-        on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        callbacks: TurnCallbacks,
         held_for: object = None,
         on_unsolicited: Optional[Callable[[], None]] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
         remote_control: Optional[dict] = None,
     ):
-        super().__init__(daemon=True)
+        super().__init__(
+            prompt or "",
+            session_id,
+            cwd,
+            permission_mode,
+            model=model,
+            effort=effort,
+            callbacks=callbacks,
+        )
+        # None is meaningful here: a late turn has nothing to send and only
+        # reads the process it was woken for. The base class stores "" for
+        # None, which made every late turn look like an ordinary one.
+        self._prompt = prompt  # type: ignore[assignment]
         # {"enabled", "name", "reattach"}: Remote Control as the tab wants it.
         self._remote_control = remote_control
-        # Asked about a tool the permission mode leaves to a person; returns
-        # the control response's own body (allow or deny).
-        self._on_permission = on_permission
-        self._prompt = prompt
-        self._session_id = session_id
-        self._cwd = cwd
-        self._permission_mode = permission_mode
-        self._model = model
-        self._effort = effort
-        self._on_session = on_session
-        self._on_started = on_started
-        self._on_activity = on_activity
-        self._on_complete = on_complete
-        self._on_failed = on_failed
-        self._on_done = on_done
-        self._on_question = on_question
-        self._on_subagent = on_subagent or ignore_subagents
         # Which tab's held process this turn borrows, and who to tell when the
         # CLI speaks with no turn attached.
         self._held_for = held_for
         self._on_unsolicited = on_unsolicited
+
+    def _setup(self) -> None:
         self._session: Optional[claude_session.ClaudeSession] = None
         # The queue this turn is reading, kept so Stop can wake a reader that
         # is parked on it.
         self._events: Optional[queue.Queue] = None
-        self._cancelled = False
         # When the drain that follows Stop runs out. Set by `cancel`, so the
         # budget is counted from Stop rather than from the last event.
         self._cancel_deadline: Optional[float] = None
-        # Set once the session is up and the opening prompt has gone in, cleared
-        # when the turn ends. Guards `steer()` against writing to a session that
-        # is not there yet (or is already gone).
-        self._accepting_input = threading.Event()
-        # A failure is reported once, so a crash late in the turn cannot talk
-        # over the explanation the turn already gave.
-        self._failed = False
-
-    def _fail(self, message: str) -> None:
-        """Report why the turn ended, once."""
-        if self._failed:
-            return
-        self._failed = True
-        self._on_failed(message)
 
     def _ending_note(self, rc: object, detail: str) -> str:
         """How the run ended, with its exit code when there is one.
@@ -440,17 +415,6 @@ class ClaudeWorker(threading.Thread):
         session = self._session
         if session is not None:
             session.stop()
-
-    def run(self) -> None:
-        try:
-            self._do_run()
-        except Exception as exc:
-            # Anything thrown here used to end the turn without a word, leaving
-            # the exit code as the whole explanation. Say what actually
-            # happened instead.
-            self._fail(f"BlindPilot stopped reading Claude Code: {exc}")
-        finally:
-            self._on_done()
 
     @staticmethod
     def _retry_without_prompt_tool(stderr_text: str) -> bool:

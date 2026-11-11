@@ -5,6 +5,7 @@ writes (measured at 1.53.1) and the callbacks are read back.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import io
 import json
@@ -108,12 +109,14 @@ def _run(
         auto_free_fallback=auto_free_fallback,
         auto_route=auto_route,
         auto_context_tokens=auto_context_tokens,
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     worker.start()
     worker.join(20)
@@ -191,6 +194,7 @@ def test_auto_route_does_not_probe_slash_commands(monkeypatch, worker_env):
 
 
 def test_cancel_during_auto_probe_prevents_command_code_launch(monkeypatch, worker_env):
+    import backend_probes
     import commandcode_backend
     import commandcode_router
 
@@ -223,9 +227,11 @@ def test_cancel_during_auto_probe_prevents_command_code_launch(monkeypatch, work
             return -9
 
     probe = HeldProbe()
-    monkeypatch.setattr(
-        commandcode_backend.agent_backends, "find_backend_cli", lambda _id: "command-code"
-    )
+    # The auto-route probe resolves the CLI through the worker's own copy and
+    # through backend_probes (the backend's call-time lookup); patch both so the
+    # --list-models probe launches instead of hunting for a real binary.
+    monkeypatch.setattr(commandcode_worker, "find_backend_cli", lambda _id: "command-code")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _id: "command-code")
     monkeypatch.setattr(commandcode_backend, "commandcode_config", dict)
     monkeypatch.setattr(commandcode_router, "price_catalog", dict)
 
@@ -250,12 +256,14 @@ def test_cancel_during_auto_probe_prevents_command_code_launch(monkeypatch, work
         "C:\\work",
         "plan",
         auto_route=True,
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     worker.start()
     assert probing.wait(5)
@@ -471,12 +479,14 @@ def test_a_completion_callback_that_raises_is_not_announced_as_a_failed_turn(wor
         "plan",
         model="gpt-5.5",
         effort="xhigh",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda _kind, _text: None,
-        on_complete=boom,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda _kind, _text: None,
+            on_complete=boom,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     worker.start()
     worker.join(20)
@@ -767,12 +777,14 @@ def test_a_missing_cli_is_reported(monkeypatch):
         None,
         "C:\\work",
         "plan",
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     worker.start()
     worker.join(20)
@@ -788,12 +800,14 @@ def test_a_turn_provides_what_the_window_drives_it_through():
         None,
         "C:\\work",
         "plan",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _m: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _m: None,
+            on_done=lambda: None,
+        ),
     )
     assert worker.accepting_input() is False
     assert worker.steer("more") is False
@@ -846,12 +860,14 @@ def test_cancel_reports_stopped_without_a_failure(monkeypatch):
         None,
         "C:\\work",
         "plan",
-        on_session=rec.callback("session"),
-        on_started=on_started,
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=on_started,
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     worker.start()
     assert started.wait(10)
@@ -887,12 +903,14 @@ def test_cancel_after_the_answer_is_not_reported_a_second_time(monkeypatch):
         None,
         "C:\\work",
         "plan",
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     holder["worker"] = worker
     worker.run()
@@ -943,12 +961,14 @@ def test_a_cancelled_turn_whose_answer_listener_raises_is_not_a_failure(monkeypa
         None,
         "C:\\work",
         "plan",
-        on_session=lambda _sid: None,
-        on_started=lambda: started.set(),
-        on_activity=lambda _k, _t: None,
-        on_complete=boom,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: started.set(),
+            on_activity=lambda _k, _t: None,
+            on_complete=boom,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     worker.start()
     assert started.wait(10)
@@ -965,13 +985,15 @@ def _worker(rec, **extra):
         "original",
         ".",
         "default",
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
         **extra,
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
 
 
@@ -1062,13 +1084,15 @@ def test_a_compaction_callback_that_raises_is_not_announced_as_a_failed_turn(
         "original",
         ".",
         "default",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=boom,
-        on_failed=failures.append,
-        on_done=lambda: None,
         compact=True,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=boom,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     worker.run()
 
@@ -1334,12 +1358,14 @@ def _bypass_worker(recorder, cwd):
         None,
         cwd,
         "bypassPermissions",
-        on_session=recorder.callback("session"),
-        on_started=recorder.callback("started"),
-        on_activity=recorder.callback("activity"),
-        on_complete=recorder.callback("complete"),
-        on_failed=recorder.callback("failed"),
-        on_done=recorder.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=recorder.callback("session"),
+            on_started=recorder.callback("started"),
+            on_activity=recorder.callback("activity"),
+            on_complete=recorder.callback("complete"),
+            on_failed=recorder.callback("failed"),
+            on_done=recorder.callback("done"),
+        ),
     )
 
 
@@ -1645,12 +1671,14 @@ def test_a_lost_session_retry_still_gets_the_bare_effort_retry(worker_env, monke
         "C:\\work",
         "plan",
         effort="xhigh",
-        on_session=rec.callback("session"),
-        on_started=rec.callback("started"),
-        on_activity=rec.callback("activity"),
-        on_complete=rec.callback("complete"),
-        on_failed=rec.callback("failed"),
-        on_done=rec.callback("done"),
+        callbacks=TurnCallbacks(
+            on_session=rec.callback("session"),
+            on_started=rec.callback("started"),
+            on_activity=rec.callback("activity"),
+            on_complete=rec.callback("complete"),
+            on_failed=rec.callback("failed"),
+            on_done=rec.callback("done"),
+        ),
     )
     worker.start()
     worker.join(20)
@@ -1722,12 +1750,14 @@ def _capacity_worker():
         None,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _m: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _m: None,
+            on_done=lambda: None,
+        ),
     )
 
 

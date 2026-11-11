@@ -92,11 +92,10 @@ def test_the_security_scan_covers_branches_that_are_not_main_yet():
 
     Scanning it only after it merges is scanning it too late to matter.
     """
-    codeql = [
-        text
-        for text in _workflow_text().values()
-        if "codeql" in text.lower() or "security-events: write" in text
-    ]
+    # A security scanner is identified by the write permission it needs to
+    # upload results, not by any file that merely names CodeQL: ci.yml mentions
+    # it in a schedule comment and is not itself a scanner.
+    codeql = [text for text in _workflow_text().values() if "security-events: write" in text]
     assert codeql, "no security scanning workflow"
     for text in codeql:
         lines = text.splitlines()

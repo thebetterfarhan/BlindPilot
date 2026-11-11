@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-import agent_backends
+import backend_probes
 import museai_backend as backend
 import blindpilot_app as app
 
@@ -119,8 +119,8 @@ def gateway(monkeypatch):
         calls.append(args)
         return 0, json.dumps({"ok": True, "result": reply})
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "muse-cli")
-    monkeypatch.setattr(agent_backends, "_probe_backend", probe)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "muse-cli")
+    monkeypatch.setattr(backend_probes, "_probe_backend", probe)
     return calls, reply
 
 

@@ -7,6 +7,7 @@ worker runs it, so nothing reaches the user's real cloud agent.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import time
@@ -56,12 +57,14 @@ def _worker(monkeypatch, send, histories=(), start=None, session_id=None, approv
         session_id,
         "C:/work",
         "default",
-        on_session=lambda s: events.append(("session", s)),
-        on_started=lambda: events.append(("started",)),
-        on_activity=lambda kind, text: events.append(("activity", kind, text)),
-        on_complete=lambda text: events.append(("complete", text)),
-        on_failed=lambda text: events.append(("failed", text)),
-        on_done=lambda: events.append(("done",)),
+        callbacks=TurnCallbacks(
+            on_session=lambda s: events.append(("session", s)),
+            on_started=lambda: events.append(("started",)),
+            on_activity=lambda kind, text: events.append(("activity", kind, text)),
+            on_complete=lambda text: events.append(("complete", text)),
+            on_failed=lambda text: events.append(("failed", text)),
+            on_done=lambda: events.append(("done",)),
+        ),
     )
     return worker, calls, events
 

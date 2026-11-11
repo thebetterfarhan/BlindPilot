@@ -1,7 +1,7 @@
 import json
 import time
 
-import agent_backends
+import backend_probes
 from backend_updates import (
     BackendUpdateService,
     BackendUpdateState,
@@ -18,8 +18,8 @@ def test_versions_are_numeric_and_prereleases_are_explicit():
 
 
 def test_npm_check_compares_package_metadata_to_same_executable(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "C:/bin/cmdc.exe")
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "C:/bin/cmdc.exe")
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
     monkeypatch.setattr(
         "backend_updates._run_version_probe",
         lambda _binary: "command-code 1.2.3",
@@ -39,8 +39,8 @@ def test_npm_check_compares_package_metadata_to_same_executable(monkeypatch, tmp
 
 
 def test_failed_check_is_cached_and_force_refresh_bypasses_cache(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "C:/bin/cmdc.exe")
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "C:/bin/cmdc.exe")
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
     calls = []
 
     def probe(_binary):
@@ -63,8 +63,8 @@ def test_failed_check_is_cached_and_force_refresh_bypasses_cache(monkeypatch, tm
 
 
 def test_unknown_latest_is_installed_only(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "C:/bin/hermes.exe")
-    monkeypatch.setattr(agent_backends, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "C:/bin/hermes.exe")
+    monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
     monkeypatch.setattr("backend_updates._run_version_probe", lambda _binary: "0.4.0")
     service = BackendUpdateService(cache_path=tmp_path / "cache.json")
 

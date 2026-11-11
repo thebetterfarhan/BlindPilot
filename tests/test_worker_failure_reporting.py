@@ -9,6 +9,7 @@ traceback went to a stderr the packaged windowed build does not have.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import io
 import subprocess
@@ -18,12 +19,8 @@ import pytest
 
 import agent_backends
 import codex_worker
-from agent_backends import (
-    BACKEND_CODEX,
-    CodexWorker,
-    FreebuffWorker,
-    OpencodeWorker,
-)
+from agent_backends import BACKEND_CODEX, CodexWorker, OpencodeWorker
+from freebuff_worker import FreebuffWorker
 
 WORKERS = [CodexWorker, FreebuffWorker, OpencodeWorker]
 
@@ -41,12 +38,14 @@ class _Recorder:
             None,
             ".",
             "default",
-            on_session=lambda _value: None,
-            on_started=lambda: None,
-            on_activity=lambda _kind, _value: None,
-            on_complete=self.completed.append,
-            on_failed=self.failures.append,
-            on_done=self._finish,
+            callbacks=TurnCallbacks(
+                on_session=lambda _value: None,
+                on_started=lambda: None,
+                on_activity=lambda _kind, _value: None,
+                on_complete=self.completed.append,
+                on_failed=self.failures.append,
+                on_done=self._finish,
+            ),
         )
 
     def _finish(self) -> None:

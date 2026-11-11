@@ -19,6 +19,7 @@ With nobody reading, nobody answered the server's pings either.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 import time
@@ -329,7 +330,7 @@ def _run_loop(
     callbacks["on_activity"] = lambda kind, text: rows.append((kind, text))
     callbacks["on_failed"] = failed.append
     callbacks["on_complete"] = lambda _t: None
-    worker = HermesWorker("q", None, ".", "default", **callbacks)
+    worker = HermesWorker("q", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
     worker._transport = transport
     worker._consume_turn()
     return worker, rows, failed
@@ -472,7 +473,7 @@ def test_notices_keep_their_cadence_after_a_burst_of_activity(monkeypatch):
         return fake_clock["t"]
 
     monkeypatch.setattr(hw, "_now", clock)
-    worker = HermesWorker("q", None, ".", "default", **callbacks)
+    worker = HermesWorker("q", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
     worker._transport = _QuietBurstQuiet(empty_reads=91)
     worker._consume_turn()
 
@@ -555,7 +556,7 @@ def _worker_with_rows() -> tuple[HermesWorker, list[tuple[str, str]]]:
     rows: list[tuple[str, str]] = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, text: rows.append((kind, text))
-    return HermesWorker("q", None, ".", "default", **callbacks), rows
+    return HermesWorker("q", None, ".", "default", callbacks=TurnCallbacks(**callbacks)), rows
 
 
 def test_a_quiet_turn_says_it_is_still_working():
@@ -680,7 +681,7 @@ def test_a_connection_that_dies_mid_turn_is_reported_with_its_reason():
     failed: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
-    worker = HermesWorker("q", None, ".", "default", **callbacks)
+    worker = HermesWorker("q", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
     transport = _DeadAfterConnect()
     transport.alive = False
     worker._transport = transport

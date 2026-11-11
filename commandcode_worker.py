@@ -42,15 +42,12 @@ from agent_backends import (
     SUBAGENT_COMPLETED,
     SUBAGENT_FAILED,
     SUBAGENT_RUNNING,
-    SubagentReport,
+    TurnCallbacks,
     _tool_use_label,
     find_backend_cli,
     ignore_subagents,
     subagent_line,
     subprocess_env,
-)
-from questions import (
-    AskQuestions,
 )
 from process_utils import (
     end_process_group,
@@ -336,15 +333,7 @@ class CommandcodeWorker(threading.Thread):
         auto_free_fallback: bool = False,
         auto_route: bool = False,
         auto_context_tokens: Optional[int] = None,
-        on_session: Callable[[str], None],
-        on_started: Callable[[], None],
-        on_activity: Callable[[str, str], None],
-        on_complete: Callable[[str], None],
-        on_failed: Callable[[str], None],
-        on_done: Callable[[], None],
-        on_question: Optional[AskQuestions] = None,
-        on_permission: Optional[Callable[[str, dict, list], dict]] = None,
-        on_subagent: Optional[SubagentReport] = None,
+        callbacks: TurnCallbacks,
     ) -> None:
         super().__init__(daemon=True)
         self._prompt = prompt
@@ -379,17 +368,17 @@ class CommandcodeWorker(threading.Thread):
         # the turn ends. The CLI's print-mode stream reports no window, so
         # that half stays 0 and the window keeps the one it already knows.
         self.context_tokens: Optional[tuple[int, int]] = None
-        self._on_session = on_session
-        self._on_started = on_started
-        self._on_activity = on_activity
-        self._on_complete = on_complete
-        self._on_failed = on_failed
-        self._on_done = on_done
-        self._on_question = on_question
+        self._on_session = callbacks.on_session
+        self._on_started = callbacks.on_started
+        self._on_activity = callbacks.on_activity
+        self._on_complete = callbacks.on_complete
+        self._on_failed = callbacks.on_failed
+        self._on_done = callbacks.on_done
+        self._on_question = callbacks.on_question
         # Accepted for parity with upstream workers; not yet wired to a
         # Command Code approval request.
-        self._on_permission = on_permission
-        self._on_subagent = on_subagent or ignore_subagents
+        self._on_permission = callbacks.on_permission
+        self._on_subagent = callbacks.on_subagent or ignore_subagents
         # The agent tool calls running a nested agent, so the agent tool's own
         # failure can be said as the agent's.
         self._subagent_calls: set[str] = set()
@@ -536,14 +525,16 @@ class CommandcodeWorker(threading.Thread):
                 # the compaction instead of being retried fresh.
                 allow_session_retry=False,
                 auto_free_fallback=self._auto_free_fallback,
-                on_session=sessions.append,
-                on_started=self._notify_started,
-                on_activity=lambda kind, text: (
-                    self._on_activity(kind, text) if kind == "notice" else None
+                callbacks=TurnCallbacks(
+                    on_session=sessions.append,
+                    on_started=self._notify_started,
+                    on_activity=lambda kind, text: (
+                        self._on_activity(kind, text) if kind == "notice" else None
+                    ),
+                    on_complete=answers.append,
+                    on_failed=self._compaction_child_failed,
+                    on_done=lambda: None,
                 ),
-                on_complete=answers.append,
-                on_failed=self._compaction_child_failed,
-                on_done=lambda: None,
             )
             self._compact_child = child
             if self._cancelled:

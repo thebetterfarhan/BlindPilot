@@ -1,6 +1,7 @@
 """Codex's app-server, held across turns and shared between tabs."""
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import queue
@@ -194,12 +195,14 @@ def _bare_worker(session_id=None, prompt="hello", plan_account=agent_backends.UN
         ".",
         "default",
         plan_account=plan_account,
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _v: None,
-        on_complete=lambda _v: None,
-        on_failed=lambda _v: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _v: None,
+            on_complete=lambda _v: None,
+            on_failed=lambda _v: None,
+            on_done=lambda: None,
+        ),
     )
 
 
@@ -482,12 +485,14 @@ def test_a_turn_borrows_the_server_and_leaves_it_running(monkeypatch):
         None,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _v: None,
-        on_complete=completed.append,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _v: None,
+            on_complete=completed.append,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
 
     worker.run()
@@ -597,12 +602,14 @@ def _turn(proc, monkeypatch, session_id=None, prompt="hello"):
         session_id,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, value: activity.append((kind, value)),
-        on_complete=completed.append,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, value: activity.append((kind, value)),
+            on_complete=completed.append,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     worker.run()
     return worker, completed, failures, activity
@@ -651,12 +658,14 @@ def test_two_first_turns_at_once_start_one_server_and_neither_is_killed(monkeypa
             None,
             ".",
             "default",
-            on_session=lambda _s: None,
-            on_started=lambda: None,
-            on_activity=lambda _k, _v: None,
-            on_complete=lambda _v: None,
-            on_failed=lambda _v: None,
-            on_done=lambda: None,
+            callbacks=TurnCallbacks(
+                on_session=lambda _s: None,
+                on_started=lambda: None,
+                on_activity=lambda _k, _v: None,
+                on_complete=lambda _v: None,
+                on_failed=lambda _v: None,
+                on_done=lambda: None,
+            ),
         )
         barrier.wait(timeout=10)
         borrowed.append(worker._borrow_server())
@@ -967,12 +976,14 @@ def test_a_compaction_whose_items_arrive_before_its_announcement_still_finishes(
         ".",
         "default",
         compact=True,
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, value: activity.append((kind, value)),
-        on_complete=completed.append,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, value: activity.append((kind, value)),
+            on_complete=completed.append,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
 
     worker.run()
@@ -1485,12 +1496,14 @@ def test_a_turn_stopped_before_it_was_named_is_still_stopped(monkeypatch):
         None,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _v: None,
-        on_complete=lambda _v: None,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _v: None,
+            on_complete=lambda _v: None,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     later.append(worker)
 
@@ -1741,12 +1754,14 @@ def test_a_compaction_stopped_before_its_turn_is_named_gives_up_the_thread(monke
         ".",
         "default",
         compact=True,
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _v: None,
-        on_complete=lambda _v: None,
-        on_failed=lambda _v: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _v: None,
+            on_complete=lambda _v: None,
+            on_failed=lambda _v: None,
+            on_done=lambda: None,
+        ),
     )
     later.append(worker)
 

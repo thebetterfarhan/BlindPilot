@@ -80,10 +80,14 @@ def the_usage_report_stays_off_the_network(monkeypatch):
     """
     try:
         import agent_backends
+        import backend_probes
     except Exception:
         yield
         return
+    # Patch both holders: agent_backends re-exports the name, backend_probes
+    # defines it, and the reading code calls backend_probes' own copy.
     monkeypatch.setattr(agent_backends, "_freebuff_usage_payload", lambda _timeout: None)
+    monkeypatch.setattr(backend_probes, "_freebuff_usage_payload", lambda _timeout: None)
     yield
 
 
@@ -151,12 +155,12 @@ def the_account_choice_stays_out_of_the_real_settings(request, monkeypatch):
         yield None
         return
     try:
-        import agent_backends
+        import backend_probes
     except Exception:
         yield None
         return
     settings = Path(tempfile.mkdtemp(prefix="blindpilot-test-settings-"))
-    monkeypatch.setattr(agent_backends, "blindpilot_config_dir", lambda: settings)
+    monkeypatch.setattr(backend_probes, "blindpilot_config_dir", lambda: settings)
     # Modules that imported blindpilot_config_dir by name at load time keep
     # their own binding; patch each one's copy too, only when already loaded.
     for mod_name in ("codex_worker", "blindpilot_app"):

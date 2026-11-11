@@ -17,6 +17,7 @@ on how the two pipes were scheduled.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 import time
@@ -93,12 +94,14 @@ def _run(monkeypatch, stderr):
         None,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _v: None,
-        on_complete=lambda _v: None,
-        on_failed=failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _v: None,
+            on_complete=lambda _v: None,
+            on_failed=failures.append,
+            on_done=lambda: None,
+        ),
     )
     worker._do_run()
     return failures

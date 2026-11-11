@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-import agent_backends
+import freebuff_terminal
 
 pytestmark = pytest.mark.skipif(
     platform.system() != "Windows", reason="CREATE_NEW_CONSOLE is Windows-only"
@@ -38,9 +38,9 @@ def test_the_hidden_console_is_started_through_owned_popen(tmp_path, monkeypatch
 
     # The module's own seam: patching the name it imported by value would
     # leave the real call in place and prove nothing.
-    monkeypatch.setattr(agent_backends, "_start_owned", fake_owned_popen)
+    monkeypatch.setattr(freebuff_terminal, "_start_owned", fake_owned_popen)
 
-    handle = agent_backends._spawn_hidden_console(["cmd", "/c", "exit"], str(tmp_path))
+    handle = freebuff_terminal._spawn_hidden_console(["cmd", "/c", "exit"], str(tmp_path))
 
     assert handle is not None
     assert seen["argv"] == ["cmd", "/c", "exit"]

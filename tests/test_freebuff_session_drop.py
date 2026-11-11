@@ -15,15 +15,17 @@ for its whole hour. The chat log is the only place the drop is written down.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
-import agent_backends
 import json
+
 import pytest
-from agent_backends import (
-    FreebuffWorker,
-    _freebuff_picker_options,
-    _freebuff_run_status,
-)
+
+import freebuff_terminal
+import freebuff_worker
+from agent_backends import _freebuff_picker_options
+from freebuff_terminal import _freebuff_run_status
+from freebuff_worker import FreebuffWorker
 
 CATALOG = [
     "z-ai/glm-5.3-flash",
@@ -109,7 +111,7 @@ def test_prompt_and_answer_text_cannot_end_a_turn(tmp_path, quoted_event):
 def test_a_boot_with_only_the_drop_line_is_not_ready(tmp_path):
     """0.2.26 writes "session over" at boot and no reconnection line at all."""
     (tmp_path / "log.jsonl").write_text(REJOIN_LOG, encoding="utf-8")
-    assert not agent_backends._freebuff_boot_ready(".", {}, tmp_path, 0)
+    assert not freebuff_worker._freebuff_boot_ready(".", {}, tmp_path, 0)
 
 
 def test_a_boot_that_reached_the_fingerprint_is_ready(tmp_path):
@@ -123,7 +125,7 @@ def test_a_boot_that_reached_the_fingerprint_is_ready(tmp_path):
         REJOIN_LOG + json.dumps({"msg": "Enhanced CLI fingerprint generated successfully"}) + "\n",
         encoding="utf-8",
     )
-    assert agent_backends._freebuff_boot_ready(".", {}, tmp_path, 0)
+    assert freebuff_worker._freebuff_boot_ready(".", {}, tmp_path, 0)
 
 
 def test_a_launch_with_no_chat_yet_is_not_ready(monkeypatch):
@@ -133,8 +135,8 @@ def test_a_launch_with_no_chat_yet_is_not_ready(monkeypatch):
     through: the composer was already painted, the runtime behind it was
     not, and the message was lost with nothing in the log to show for it.
     """
-    monkeypatch.setattr(agent_backends, "_freebuff_new_chat_log", lambda *_a: None)
-    assert not agent_backends._freebuff_boot_ready(".", {}, None, 0)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_new_chat_log", lambda *_a: None)
+    assert not freebuff_worker._freebuff_boot_ready(".", {}, None, 0)
 
 
 def test_quoted_reconnection_cannot_release_a_held_message(tmp_path):
@@ -144,7 +146,7 @@ def test_quoted_reconnection_cannot_release_a_held_message(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    assert not agent_backends._freebuff_boot_ready(".", {}, tmp_path, 0)
+    assert not freebuff_worker._freebuff_boot_ready(".", {}, tmp_path, 0)
 
 
 def test_partial_log_line_cannot_complete_a_turn(tmp_path):
@@ -228,18 +230,20 @@ def _worker(turn: _Turn, model: str = "") -> FreebuffWorker:
         ".",
         "default",
         model=model,
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
 
 
 def _stub_cli(monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "freebuff")
-    monkeypatch.setattr(agent_backends, "set_freebuff_model", lambda _model: None)
+    monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
+    monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
 
 
 def _dead_terminal(worker: FreebuffWorker):
@@ -269,8 +273,8 @@ def test_a_terminal_that_dies_over_a_dropped_session_says_so(monkeypatch, tmp_pa
         polls["n"] += 1
         return {} if polls["n"] == 1 else {"chat-drop": 1.0}
 
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", dirs)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_path", lambda _cwd, _sid: chat)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", dirs)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _cwd, _sid: chat)
     worker._write = lambda _text: True
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(_dead_terminal(worker)))
 
@@ -285,7 +289,7 @@ def test_an_ordinary_death_still_reports_its_own_words(monkeypatch):
     turn = _Turn()
     worker = _worker(turn)
     _stub_cli(monkeypatch)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     worker._write = lambda _text: True
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(_dead_terminal(worker)))
 
@@ -313,9 +317,9 @@ def test_a_silent_welcome_screen_over_a_dropped_session_does_not_wait(monkeypatc
         polls["n"] += 1
         return {} if polls["n"] == 1 else {"chat-drop": 1.0}
 
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", dirs)
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_path", lambda _cwd, _sid: chat)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", dirs)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _cwd, _sid: chat)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.2)
 
     def spawn(_args):
         def read(_timeout):
@@ -340,11 +344,11 @@ def test_a_welcome_turn_still_reaches_its_answer(monkeypatch):
     _stub_cli(monkeypatch)
     _stub_boot_ready(monkeypatch, lambda: True)
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (list(CATALOG), CATALOG[0], ""),
     )
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     state = {"sent": False, "enters": 0, "downs": 0, "phase": 0}
 
     def write(text):
@@ -371,7 +375,7 @@ def test_a_welcome_turn_still_reaches_its_answer(monkeypatch):
 
     worker._write = write
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
 
     worker._do_run()
 
@@ -388,11 +392,11 @@ def test_the_chosen_model_is_reached_on_the_marker_less_screen(monkeypatch):
     _stub_cli(monkeypatch)
     _stub_boot_ready(monkeypatch, lambda: True)
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (list(CATALOG), CATALOG[0], ""),
     )
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
     state = {"sent": False, "enters": 0, "downs": 0, "phase": 0}
 
     def write(text):
@@ -419,7 +423,7 @@ def test_the_chosen_model_is_reached_on_the_marker_less_screen(monkeypatch):
 
     worker._write = write
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
 
     worker._do_run()
 
@@ -436,17 +440,17 @@ def test_a_dropped_session_logged_mid_turn_gets_patience_then_ends_the_turn(monk
     worker = _worker(turn, model="z-ai/glm-5.3-flash")
     _stub_cli(monkeypatch)
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (list(CATALOG), CATALOG[0], ""),
     )
     chat = tmp_path / "chat"
     chat.mkdir()
     (chat / "log.jsonl").write_text("", encoding="utf-8")
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {"chat": 1.0})
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_path", lambda _cwd, _sid: chat)
-    monkeypatch.setattr(agent_backends, "_freebuff_answer_id", lambda _p: "")
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_snapshot", lambda _p: ("", "", "", []))
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {"chat": 1.0})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _cwd, _sid: chat)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_answer_id", lambda _p: "")
+    monkeypatch.setattr(freebuff_worker, "_freebuff_chat_snapshot", lambda _p: ("", "", "", []))
     state = {"sent": False, "phase": 0}
 
     def stamp(_path):
@@ -456,8 +460,8 @@ def test_a_dropped_session_logged_mid_turn_gets_patience_then_ends_the_turn(monk
         text = (chat / "log.jsonl").read_text(encoding="utf-8")
         return "disconnected" if "session over" in text else ""
 
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_stamp", stamp)
-    monkeypatch.setattr(agent_backends, "_freebuff_run_status", run_status)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_chat_stamp", stamp)
+    monkeypatch.setattr(freebuff_worker, "_freebuff_run_status", run_status)
 
     def write(_text):
         state["sent"] = True
@@ -479,8 +483,8 @@ def test_a_dropped_session_logged_mid_turn_gets_patience_then_ends_the_turn(monk
 
     worker._write = write
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(spawn))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_DROP_PATIENCE_SECONDS", 0.05)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_DROP_PATIENCE_SECONDS", 0.05)
 
     worker._do_run()
 
@@ -543,12 +547,12 @@ def _stub_boot_ready(monkeypatch, ready):
     """Stand in for the boot readiness check, which reads the chat's own log
     on a real run; ``ready`` says what that log would show."""
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "_freebuff_boot_ready",
         lambda *_args: ready(),
     )
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_dirs", lambda _cwd: {})
-    monkeypatch.setattr(agent_backends, "_freebuff_chat_path", lambda _cwd, _sid: None)
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_dirs", lambda _cwd: {})
+    monkeypatch.setattr(freebuff_terminal, "_freebuff_chat_path", lambda _cwd, _sid: None)
 
 
 def test_the_message_is_held_until_the_boot_reconnects(monkeypatch):
@@ -570,7 +574,7 @@ def test_the_message_is_held_until_the_boot_reconnects(monkeypatch):
 
     _stub_boot_ready(monkeypatch, reconnects_after_a_moment)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(_hold_spawn(worker, state)))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
 
     worker._do_run()
 
@@ -588,8 +592,8 @@ def test_a_boot_that_never_reconnects_ends_the_hold(monkeypatch):
     state = _hold_turn_state()
     _stub_boot_ready(monkeypatch, lambda: False)
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(_hold_spawn(worker, state)))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.1)
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_STARTUP_SILENCE_SECONDS", 0.1)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
 
     worker._do_run()
 
@@ -608,12 +612,12 @@ def test_a_normal_boot_does_not_hold_the_message(monkeypatch):
     state = _hold_turn_state()
     _stub_boot_ready(monkeypatch, lambda: True)  # the reconnection is in the log
     monkeypatch.setattr(
-        agent_backends,
+        freebuff_worker,
         "freebuff_model_options",
         lambda: (list(CATALOG), CATALOG[0], ""),
     )
     monkeypatch.setattr(FreebuffWorker, "_spawn_pty", staticmethod(_hold_spawn(worker, state)))
-    monkeypatch.setattr(agent_backends, "_FREEBUFF_TURN_SECONDS", 60)
+    monkeypatch.setattr(freebuff_worker, "_FREEBUFF_TURN_SECONDS", 60)
 
     worker._do_run()
 

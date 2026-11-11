@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import agent_backends
+import backend_probes
 import google_backend
 import google_worker
 from accessible_ai.providers.chat_completions import is_gemini_chat_model
@@ -29,6 +30,7 @@ from agent_backends import (
     normalize_backend,
     worker_class,
 )
+from backend_registry import TurnCallbacks
 from google_worker import AntigravityWorker, GeminiWorker
 
 
@@ -64,12 +66,19 @@ class Recorder:
 
 
 def _worker(cls, recorder: Recorder, *, mode="bypassPermissions", session=None, **kwargs):
-    return cls("Fix the bug", session, "/project", mode, **kwargs, **recorder.callbacks())
+    return cls(
+        "Fix the bug",
+        session,
+        "/project",
+        mode,
+        **kwargs,
+        callbacks=TurnCallbacks(**recorder.callbacks()),
+    )
 
 
 @pytest.fixture
 def home(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends.Path, "home", classmethod(lambda _cls: tmp_path))
+    monkeypatch.setattr(backend_probes.Path, "home", classmethod(lambda _cls: tmp_path))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     return tmp_path
 
@@ -99,9 +108,9 @@ def test_names_resolve_to_the_new_backends():
 
 
 def test_agy_is_found_where_its_windows_installer_puts_it(monkeypatch, tmp_path):
-    monkeypatch.setattr(agent_backends.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(backend_probes.platform, "system", lambda: "Windows")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    assert tmp_path / "agy" / "bin" / "agy.exe" in agent_backends._fallback_cli_paths("agy")
+    assert tmp_path / "agy" / "bin" / "agy.exe" in backend_probes._fallback_cli_paths("agy")
 
 
 # -- commands ----------------------------------------------------------------
@@ -464,7 +473,9 @@ def test_a_whole_gemini_turn_runs_on_its_own_sign_in(monkeypatch, tmp_path, home
     )
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     # An agent turn never carries a key BlindPilot chose; the CLI signs itself in.
     assert "GEMINI_API_KEY" not in worker._env(cli)
     worker.start()
@@ -481,7 +492,9 @@ def test_a_signed_out_gemini_turn_says_how_to_sign_in(monkeypatch, tmp_path, hom
     cli = _fake_cli(tmp_path, "gemini", [], exit_code=41)
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.failed and "Sign in with your Google account" in recorder.failed[0]
@@ -492,7 +505,9 @@ def test_a_gemini_crash_is_reported_with_its_reason(monkeypatch, tmp_path, home)
     cli = _fake_cli(tmp_path, "gemini", [{"type": "init", "session_id": "s"}], exit_code=1)
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.completed == []
@@ -573,7 +588,9 @@ def test_a_whole_antigravity_turn_sends_the_prompt_as_ndjson(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = AntigravityWorker("Say hi", "c-0", str(tmp_path), "plan", **recorder.callbacks())
+    worker = AntigravityWorker(
+        "Say hi", "c-0", str(tmp_path), "plan", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.completed == ["Hi."]
@@ -590,7 +607,7 @@ def test_a_missing_cli_says_how_to_install_it(monkeypatch):
         (AntigravityWorker, "antigravity.google"),
     ):
         recorder = Recorder()
-        worker = cls("hi", None, ".", "default", **recorder.callbacks())
+        worker = cls("hi", None, ".", "default", callbacks=TurnCallbacks(**recorder.callbacks()))
         worker.start()
         worker.join(timeout=10)
         assert recorder.failed and words in recorder.failed[0]
@@ -642,9 +659,9 @@ def test_both_backends_sign_in_in_a_terminal_and_are_watched():
 
 
 def test_agy_is_signed_in_when_it_lists_models(monkeypatch, home):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "agy")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "agy")
     monkeypatch.setattr(
-        agent_backends,
+        backend_probes,
         "_probe_backend",
         lambda *_a: (0, "Fetching available models...\nm-1\tModel One\n"),
     )
@@ -656,20 +673,20 @@ def test_agy_is_signed_in_when_it_lists_models(monkeypatch, home):
 
 
 def test_agy_model_list_is_read_from_its_output(monkeypatch, home):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "agy")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "agy")
     output = (
         "Fetching available models...\n"
         "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n"
         "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
     )
-    monkeypatch.setattr(agent_backends, "_probe_backend", lambda *_a: (0, output))
+    monkeypatch.setattr(backend_probes, "_probe_backend", lambda *_a: (0, output))
     models, efforts, current, effort, error = google_backend.antigravity_model_options()
     assert models == ["gemini-3.8-flash-high", "gemini-3.8-flash-low"]
     assert efforts == ["low", "medium", "high", "xhigh", "max"]
     assert error == ""
     # Signed out it still exits 0, and the list is empty.
     signed_out = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.\n"
-    monkeypatch.setattr(agent_backends, "_probe_backend", lambda *_a: (0, signed_out))
+    monkeypatch.setattr(backend_probes, "_probe_backend", lambda *_a: (0, signed_out))
     models, _efforts, _current, _effort, error = google_backend.antigravity_model_options()
     assert models == []
     assert error.startswith("Please sign in")
@@ -677,7 +694,7 @@ def test_agy_model_list_is_read_from_its_output(monkeypatch, home):
 
 
 def test_gemini_models_offer_the_cli_aliases(monkeypatch, home):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "gemini")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "gemini")
     models, efforts, current, _effort, error = google_backend.gemini_model_options()
     assert models == ["auto", "pro", "flash", "flash-lite"]
     assert efforts == []

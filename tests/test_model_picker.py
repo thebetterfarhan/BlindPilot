@@ -9,6 +9,7 @@ Run from the project root:
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import os
 import sys
@@ -322,13 +323,15 @@ def _worker_command(**kwargs) -> list[str]:
             None,
             os.getcwd(),
             "default",
-            on_session=lambda _s: None,
-            on_started=lambda: None,
-            on_activity=lambda _k, _t: None,
-            on_complete=lambda _t: None,
-            on_failed=lambda _m: None,
-            on_done=lambda: None,
             **kwargs,
+            callbacks=TurnCallbacks(
+                on_session=lambda _s: None,
+                on_started=lambda: None,
+                on_activity=lambda _k, _t: None,
+                on_complete=lambda _t: None,
+                on_failed=lambda _m: None,
+                on_done=lambda: None,
+            ),
         ).run()
     finally:
         claude_session._popen = real_popen  # type: ignore[assignment]

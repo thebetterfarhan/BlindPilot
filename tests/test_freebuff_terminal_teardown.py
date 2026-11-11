@@ -8,11 +8,12 @@ turn and one per prewarmed terminal that is thrown away.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 
-import agent_backends
-from agent_backends import FreebuffWorker
+import freebuff_worker
+from freebuff_worker import FreebuffWorker
 
 
 class _FakeTerminal:
@@ -32,7 +33,7 @@ class _FakeTerminal:
 def test_killing_a_terminal_closes_it_as_well_as_ending_it():
     terminal = _FakeTerminal()
 
-    agent_backends.end_hidden_terminal(terminal)
+    freebuff_worker.end_hidden_terminal(terminal)
 
     assert terminal.calls == ["terminate", "close"], (
         "a terminate that worked left the pseudo-terminal open"
@@ -49,7 +50,7 @@ def test_a_terminal_that_will_not_terminate_is_still_closed():
 
     terminal = _Stuck()
 
-    agent_backends.end_hidden_terminal(terminal)
+    freebuff_worker.end_hidden_terminal(terminal)
 
     assert terminal.calls == ["terminate", "close"]
 
@@ -65,7 +66,9 @@ def test_ending_a_turn_gives_back_the_terminal_it_ran_in():
         "on_failed": lambda _value: None,
         "on_done": lambda: None,
     }
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
     def turn():
         worker._pty = terminal

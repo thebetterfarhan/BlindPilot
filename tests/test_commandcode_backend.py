@@ -1,7 +1,7 @@
 """The Command Code adapter without a Command Code install.
 
 Everything here is answered from fakes -- the CLI probe and binary discovery
-are patched in ``agent_backends``, which is exactly how the shared "every
+are patched in ``backend_probes``, which is exactly how the shared "every
 backend" tests fence the other adapters off from the machine the suite runs
 on. No Node start-up, no network, no account.
 """
@@ -16,6 +16,7 @@ import threading
 import time
 
 import agent_backends
+import backend_probes
 import commandcode_backend
 import pytest
 import session_history
@@ -55,7 +56,7 @@ def test_agent_command_discovery_closes_its_pipes(monkeypatch):
             return 0
 
     process = Process()
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "command-code")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "command-code")
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: process)
 
     assert commandcode_backend._fetch_agent_commands("") == [("/help", "Show help")]
@@ -85,7 +86,7 @@ def test_agent_command_discovery_reaps_after_forced_kill(monkeypatch):
             self.killed = True
 
     process = Process()
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "command-code")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "command-code")
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: process)
     # This patches the process-wide clock. Answering every thread let another
     # one take the 0, which put the deadline past the frozen 46 and spun the
@@ -150,7 +151,7 @@ def test_two_lookups_at_once_start_one_acp_server(monkeypatch):
             release.wait(5)
         return Process()
 
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "command-code")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "command-code")
     monkeypatch.setattr(subprocess, "Popen", popen)
     monkeypatch.setattr(commandcode_backend, "_AGENT_COMMANDS", {})
     monkeypatch.setattr(commandcode_backend, "_AGENT_COMMANDS_INFLIGHT", {})
@@ -224,8 +225,8 @@ def _fake_probe(whoami=(0, WHOAMI_SIGNED_IN), models=(0, CATALOG)):
 
 
 def _wire(monkeypatch, **kwargs):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: "command-code")
-    monkeypatch.setattr(agent_backends, "_probe_backend", _fake_probe(**kwargs))
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "command-code")
+    monkeypatch.setattr(backend_probes, "_probe_backend", _fake_probe(**kwargs))
 
 
 # --------------------------------------------------------------------------
@@ -346,7 +347,7 @@ def test_model_options_read_the_current_choice_from_config(home, monkeypatch):
 
 
 def test_a_missing_cli_is_reported_not_guessed(home, monkeypatch):
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: None)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: None)
     models, _efforts, _current, _effort, error = commandcode_backend.commandcode_model_options()
     assert models == []
     assert "not found" in error
@@ -397,7 +398,7 @@ def test_a_server_that_cannot_be_reached_is_not_a_signed_out_user(home, monkeypa
 
 def test_no_cli_at_all_falls_back_to_the_stored_credential(home, monkeypatch):
     """The file is consulted only when the CLI never ran to answer."""
-    monkeypatch.setattr(agent_backends, "find_backend_cli", lambda _backend: None)
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: None)
     home.joinpath(".commandcode").mkdir(parents=True)
     home.joinpath(".commandcode", "auth.json").write_text(
         json.dumps({"userName": "person"}), encoding="utf-8"

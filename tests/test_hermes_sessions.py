@@ -19,6 +19,7 @@ documents:
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import hermes_backend
 import hermes_worker
@@ -98,7 +99,9 @@ def _reply(request_id: int, result: dict) -> dict:
 def _worker(**overrides) -> HermesWorker:
     callbacks = _callbacks()
     callbacks.update(overrides)
-    return HermesWorker("", "stored-1", ".", "default", resume_only=True, **callbacks)
+    return HermesWorker(
+        "", "stored-1", ".", "default", resume_only=True, callbacks=TurnCallbacks(**callbacks)
+    )
 
 
 # -- the catalog -----------------------------------------------------------
@@ -424,7 +427,9 @@ def test_a_replay_with_no_conversation_id_fails_before_asking():
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = HermesWorker("", None, ".", "default", resume_only=True, **callbacks)
+    worker = HermesWorker(
+        "", None, ".", "default", resume_only=True, callbacks=TurnCallbacks(**callbacks)
+    )
     transport = _FakeTransport([])
 
     _run_replay(worker, transport)

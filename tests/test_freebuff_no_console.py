@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-import agent_backends as ab
+import freebuff_terminal as ab
 import process_utils
 
 
@@ -90,7 +90,7 @@ def test_a_windowless_process_gains_no_console_from_the_terminal(tmp_path):
     helper.write_text(
         "import ctypes, json, os, sys, threading, time\n"
         f"sys.path.insert(0, {os.getcwd()!r})\n"
-        "import agent_backends as ab\n"
+        "import freebuff_terminal as ab\n"
         "k = ctypes.windll.kernel32\n"
         "before = k.GetConsoleWindow()\n"
         "ended = threading.Event()\n"

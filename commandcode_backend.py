@@ -15,8 +15,8 @@ shapes this file reads). Discovery, authentication, the model catalog and the
 stored session locations live here so ``agent_backends`` stays
 provider-neutral; the turn itself is in ``commandcode_worker``.
 
-CLI probes go through ``agent_backends._probe_backend`` and binary discovery
-through ``agent_backends.find_backend_cli`` -- resolved at call time, not
+CLI probes go through ``backend_probes._probe_backend`` and binary discovery
+through ``backend_probes.find_backend_cli`` -- resolved at call time, not
 imported into this module's namespace -- so the suite's "every backend"
 tests, which patch those two in ``agent_backends``, fence this adapter off
 from the machine it runs on exactly like the others.
@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 import agent_backends
+import backend_probes
 import process_utils
 from agent_backends import BACKEND_COMMANDCODE
 
@@ -89,7 +90,7 @@ def commandcode_credentials() -> Optional[dict]:
 
 def _probe(binary: str, args: list[str], timeout: int) -> tuple[Optional[int], str]:
     """One short CLI command, through the shared probe the suite can fence."""
-    return agent_backends._probe_backend(binary, args, timeout)
+    return backend_probes._probe_backend(binary, args, timeout)
 
 
 def _says_signed_out(text: str) -> bool:
@@ -133,7 +134,7 @@ def commandcode_auth_ok(timeout: int = 12) -> bool:
     consulted only when the CLI could not be run at all, or could not reach the
     server, so an offline machine never reports a signed-in user as signed out.
     """
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if binary:
         code, text = _probe(binary, ["whoami"], timeout)
         if code == 0:
@@ -145,7 +146,7 @@ def commandcode_auth_ok(timeout: int = 12) -> bool:
 
 def commandcode_account_lines() -> list[str]:
     """The sign-in report, as the lines ``/status`` prints them."""
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if binary:
         code, text = _probe(binary, ["whoami"], 20)
         if code == 0:
@@ -296,7 +297,7 @@ def commandcode_model_options(
     cancel_event: Optional[threading.Event] = None,
 ) -> tuple[list[str], list[str], str, str, str]:
     """The picker's answer: (models, efforts, current model, current effort, error)."""
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if not binary:
         return [], [], "", "", "Command Code was not found."
     if cancel_event is None:
@@ -313,7 +314,7 @@ def commandcode_model_options(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env={**agent_backends.subprocess_env(binary), "PYTHONIOENCODING": "utf-8"},
+                env={**backend_probes.subprocess_env(binary), "PYTHONIOENCODING": "utf-8"},
                 **process_utils.no_window_kwargs(),
                 **process_utils.own_group_kwargs(),
             )
@@ -423,7 +424,7 @@ def _fetch_agent_commands(cwd: str) -> list[tuple[str, str]]:
     import queue
     import subprocess
 
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if not binary:
         return []
     try:
@@ -436,7 +437,7 @@ def _fetch_agent_commands(cwd: str) -> list[tuple[str, str]]:
             encoding="utf-8",
             errors="replace",
             cwd=cwd or None,
-            env=agent_backends.subprocess_env(binary),
+            env=backend_probes.subprocess_env(binary),
             **process_utils.no_window_kwargs(),
         )
     except (OSError, ValueError):
@@ -565,7 +566,7 @@ def commandcode_console_command(
 
     from freebuff_screen import repaired_history_screen
 
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if not binary:
         return "Command Code is not installed."
     args = [binary, "-t", "--skip-onboarding"]
@@ -618,7 +619,7 @@ def commandcode_console_commands() -> list[tuple[str, str]]:
     """The console's built-in slash commands, from `command-code --help`."""
     if _CONSOLE_COMMANDS:
         return _CONSOLE_COMMANDS
-    binary = agent_backends.find_backend_cli(BACKEND_COMMANDCODE)
+    binary = backend_probes.find_backend_cli(BACKEND_COMMANDCODE)
     if not binary:
         return []
     code, text = _probe(binary, ["--help"], CLI_PROBE_TIMEOUT)
