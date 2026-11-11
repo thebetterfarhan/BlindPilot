@@ -17,31 +17,6 @@
       "Bash(rtk git log:*)"
     ]
   },
-  "extraKnownMarketplaces": {
-    "ponytail": {
-      "source": {
-        "source": "github",
-        "repo": "DietrichGebert/ponytail"
-      }
-    },
-    "akramsystems-plugins": {
-      "source": {
-        "source": "github",
-        "repo": "akramsystems/caveman"
-      }
-    },
-    "mattpocock": {
-      "source": {
-        "source": "github",
-        "repo": "mattpocock/skills"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "ponytail@ponytail": true,
-    "caveman@akramsystems-plugins": true,
-    "mattpocock-skills@mattpocock": true
-  },
   "hooks": {
     "SessionStart": [
       {

@@ -7,8 +7,8 @@ English.
 
 ## Matt Pocock skills
 
-The `mattpocock-skills` plugin is on in every session, and this repo is already
-set up for it (`docs/agents/`). Reach for `tdd` on bug fixes and new behavior,
+The `mattpocock-skills` plugin is enabled on the claude.ai account, so it loads
+in cloud sessions too, and this repo is already set up for it (`docs/agents/`). Reach for `tdd` on bug fixes and new behavior,
 `grilling` before a large change, and `diagnosing-bugs` for hard failures.
 `code-review` runs two subagents at once, so treat it like `reviewer`: only when
 asked or before a risky PR.
