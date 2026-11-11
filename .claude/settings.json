@@ -17,39 +17,14 @@
       "Bash(rtk git log:*)"
     ]
   },
-  "extraKnownMarketplaces": {
-    "ponytail": {
-      "source": {
-        "source": "github",
-        "repo": "DietrichGebert/ponytail"
-      }
-    },
-    "akramsystems-plugins": {
-      "source": {
-        "source": "github",
-        "repo": "akramsystems/caveman"
-      }
-    },
-    "mattpocock": {
-      "source": {
-        "source": "github",
-        "repo": "mattpocock/skills"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "ponytail@ponytail": true,
-    "caveman@akramsystems-plugins": true,
-    "mattpocock-skills@mattpocock": true
-  },
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/rtk-install.sh\"",
-            "timeout": 120
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-setup.sh\"",
+            "timeout": 600
           }
         ]
       }
@@ -61,6 +36,18 @@
           {
             "type": "command",
             "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/rtk-rewrite.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/py-lint.sh\"",
+            "timeout": 30
           }
         ]
       }

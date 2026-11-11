@@ -22,11 +22,14 @@ Work loop:
 1. Read only what the change needs. Ask the caller rather than guess when the
    task is ambiguous in a way that changes the design.
 2. Make the change, with tests.
-3. While working, run only the tests you touched:
+3. A hook formats and lints each file you edit; fix what it reports at once.
+   While working, run only the tests you touched:
    `python -m pytest -q -W error tests/test_<name>.py`.
-4. Before you finish, run the full gate and fix anything that fails:
-   `python -m ruff check .`, `python -m ruff format --check .`,
-   `python -m pytest -q -W error`, `python -m mypy`.
+4. Before you finish, run `python -m mypy` and the touched tests once more.
+   Leave the whole suite to the pre-push hook and CI; run it yourself only
+   if the caller asks or the pre-push hook is not installed
+   (`python -m pytest -q -W error -n 4 --dist loadfile`).
+   On headless Linux, prefix pytest with `xvfb-run -a`.
 
 Do not commit or push unless the caller asked you to.
 
