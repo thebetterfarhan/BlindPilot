@@ -57,7 +57,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, Sequence
+from typing import Callable, Iterable, Iterator, List, Optional, Sequence
 
 from agent_backends import (
     BACKEND_CLAUDE,
@@ -2218,6 +2218,26 @@ def restore_tasks(
                         result = block["content"]
                     tasks.apply_claude(call[0], call[1], result)
     return tasks
+
+
+def ends_mid_tool_call(records: Iterable[dict]) -> bool:
+    """Whether a Claude transcript stops with a tool call that never got a result.
+
+    That is what quitting, a crash, or a power cut leaves behind. The caller
+    says so on reopen and never runs the call again by itself (ADR 0005).
+    """
+    open_calls: set[str] = set()
+    for record in records:
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                open_calls.add(str(block.get("id")))
+            elif block.get("type") == "tool_result":
+                open_calls.discard(str(block.get("tool_use_id")))
+    return bool(open_calls)
 
 
 def prepare_history_open(
