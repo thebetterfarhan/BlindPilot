@@ -30,11 +30,21 @@ Each layer runs only what the layer before it can't, so nothing runs twice.
 
 Do not run the whole suite by hand before pushing when the pre-push hook is
 installed; that pays for it twice. Run it by hand only where the hooks are not
-installed (a fresh cloud session), and then with the same flags:
+installed, and then with the same flags:
 
 ```sh
 python -m pytest -q -W error -n 4 --dist loadfile
 ```
+
+On headless Linux, put `xvfb-run -a` in front of any pytest command, as CI
+does, so tests that open wx windows have a display.
+
+Claude Code cloud sessions set themselves up to match CI:
+`.claude/hooks/cloud-setup.sh` installs Ubuntu's wxPython runtime, builds
+`.venv` from `requirements-build.txt` on Python 3.12, installs the pre-commit
+and pre-push hooks, and puts `.venv/bin` first on PATH. The first session takes
+about 40 seconds; later ones skip what is done. Its log is
+`~/.cache/blindpilot-cloud-setup.log`.
 
 ## Gate
 

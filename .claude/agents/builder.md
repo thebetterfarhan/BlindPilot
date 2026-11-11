@@ -29,6 +29,7 @@ Work loop:
    Leave the whole suite to the pre-push hook and CI; run it yourself only
    if the caller asks or the pre-push hook is not installed
    (`python -m pytest -q -W error -n 4 --dist loadfile`).
+   On headless Linux, prefix pytest with `xvfb-run -a`.
 
 Do not commit or push unless the caller asked you to.
 

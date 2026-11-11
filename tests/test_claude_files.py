@@ -225,6 +225,10 @@ def test_files_are_found_by_kind_and_labelled_from_their_front_matter(tmp_path, 
     _write(project / "CLAUDE.md")
     _write(project / ".claude" / "settings.local.json", "{}")
     _write(project / ".mcp.json", "{}")
+    # A repository root, as a real project has. tmp_path sits inside this
+    # checkout, so without it the walk up reaches BlindPilot's own .claude
+    # folder and counts its agents.
+    (project / ".git").mkdir()
 
     found = app.claude_files(str(project))
 
