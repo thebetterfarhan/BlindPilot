@@ -6,7 +6,6 @@ release.
 """
 
 from __future__ import annotations
-from backend_registry import TurnCallbacks
 
 import json
 import threading
@@ -14,6 +13,7 @@ import threading
 import agent_backends
 import copilot_backend
 import session_history
+from backend_registry import TurnCallbacks
 from task_list import TaskList
 
 
@@ -34,11 +34,14 @@ def _worker(**overrides):
         "on_done": lambda: None,
         "on_subagent": lambda *report: said["subagents"].append(report),
     }
-    options.update(overrides)
-    prompt = options.pop("prompt", "hello")
-    session = options.pop("session", None)
-    mode = options.pop("mode", "bypassPermissions")
-    worker = copilot_backend.CopilotWorker(prompt, session, "C:/proj", mode, **options)
+    options.update({k: v for k, v in overrides.items() if k.startswith("on_")})
+    extras = {k: v for k, v in overrides.items() if not k.startswith("on_")}
+    prompt = extras.pop("prompt", "hello")
+    session = extras.pop("session", None)
+    mode = extras.pop("mode", "bypassPermissions")
+    worker = copilot_backend.CopilotWorker(
+        prompt, session, "C:/proj", mode, callbacks=TurnCallbacks(**options), **extras
+    )
     return worker, said
 
 
@@ -229,7 +232,7 @@ def test_the_worker_keeps_threadings_started_event():
 
 def test_notify_started_fires_on_started_exactly_once():
     fired: list[str] = []
-    worker, _said = _worker(callbacks=TurnCallbacks(on_started=lambda: fired.append("started")))
+    worker, _said = _worker(on_started=lambda: fired.append("started"))
     worker._notify_started()
     worker._notify_started()
     assert fired == ["started"]

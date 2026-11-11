@@ -204,6 +204,10 @@ class ClaudeWorker(_TurnWorker):
             effort=effort,
             callbacks=callbacks,
         )
+        # None is meaningful here: a late turn has nothing to send and only
+        # reads the process it was woken for. The base class stores "" for
+        # None, which made every late turn look like an ordinary one.
+        self._prompt = prompt  # type: ignore[assignment]
         # {"enabled", "name", "reattach"}: Remote Control as the tab wants it.
         self._remote_control = remote_control
         # Which tab's held process this turn borrows, and who to tell when the

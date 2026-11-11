@@ -1,6 +1,5 @@
 """Regression cases found while auditing the FreeBuff integration."""
 
-from backend_registry import TurnCallbacks
 import ctypes
 import json
 import platform
@@ -11,12 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 
-import agent_backends as ab
+import backend_probes
 import freebuff_terminal
 import freebuff_worker
 import process_utils
 import session_history as history
 from accessible_ai.storage.credentials import CredentialStore
+from backend_registry import TurnCallbacks
 
 
 def _worker(**callbacks):
@@ -29,31 +29,33 @@ def _worker(**callbacks):
         "on_done": lambda: None,
     }
     defaults.update(callbacks)
-    return freebuff_worker.FreebuffWorker("do the work", None, ".", "default", **defaults)
+    return freebuff_worker.FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**defaults)
+    )
 
 
 @pytest.mark.parametrize("mtime", ["broken", [1], {"bad": 1}])
 def test_corrupt_catalog_timestamp_is_a_cache_miss(monkeypatch, tmp_path, mtime):
     cache = tmp_path / "catalog.json"
     cache.write_text(json.dumps({"path": "binary", "size": 10, "mtime": mtime, "models": ["a/b"]}))
-    monkeypatch.setattr(ab, "_freebuff_catalog_cache_path", lambda: cache)
-    assert ab._read_freebuff_catalog_cache(("binary", 1.0, 10)) == []
+    monkeypatch.setattr(backend_probes, "_freebuff_catalog_cache_path", lambda: cache)
+    assert backend_probes._read_freebuff_catalog_cache(("binary", 1.0, 10)) == []
 
 
 def test_the_catalog_cache_is_written_beside_the_file_and_moved_into_place(monkeypatch, tmp_path):
     """A read landing mid-write must never see a half-copied catalog."""
     cache = tmp_path / "freebuff-catalog.json"
-    monkeypatch.setattr(ab, "_freebuff_catalog_cache_path", lambda: cache)
+    monkeypatch.setattr(backend_probes, "_freebuff_catalog_cache_path", lambda: cache)
 
-    ab._write_freebuff_catalog_cache(("binary", 1.5, 10), ["a/b"])
+    backend_probes._write_freebuff_catalog_cache(("binary", 1.5, 10), ["a/b"])
 
-    assert ab._read_freebuff_catalog_cache(("binary", 1.5, 10)) == ["a/b"]
+    assert backend_probes._read_freebuff_catalog_cache(("binary", 1.5, 10)) == ["a/b"]
     assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_keychain_credentials_count_as_signed_in_without_rewriting_them(monkeypatch, tmp_path):
-    monkeypatch.setattr(ab.Path, "home", classmethod(lambda _: tmp_path))
-    monkeypatch.setattr(ab.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(backend_probes.Path, "home", classmethod(lambda _: tmp_path))
+    monkeypatch.setattr(backend_probes.platform, "system", lambda: "Windows")
     credential = tmp_path / ".config/manicode/credentials.json"
     credential.parent.mkdir(parents=True)
     contents = json.dumps(
@@ -74,15 +76,15 @@ def test_keychain_credentials_count_as_signed_in_without_rewriting_them(monkeypa
         return "stored-token"
 
     monkeypatch.setattr(CredentialStore, "_windows_read", staticmethod(read))
-    account = ab._freebuff_account()
-    assert ab._freebuff_signed_in(account)
+    account = backend_probes._freebuff_account()
+    assert backend_probes._freebuff_signed_in(account)
     assert account["authToken"] == "stored-token"
     assert reads == [(f"freebuff-cli/{credential}", "utf-8")]
     assert credential.read_text() == contents
 
 
 def test_current_credentials_do_not_require_optional_fingerprints():
-    assert ab._freebuff_signed_in({"email": "test@example.com", "authToken": "token"})
+    assert backend_probes._freebuff_signed_in({"email": "test@example.com", "authToken": "token"})
 
 
 def test_submitting_multiline_unicode_uses_bracketed_paste_then_enter():
@@ -104,7 +106,7 @@ def test_freebuff_does_not_claim_a_busy_terminal_accepted_steering():
 
 
 def test_macos_keychain_uses_freebuffs_service_and_credential_path(monkeypatch, tmp_path):
-    monkeypatch.setattr(ab.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(backend_probes.platform, "system", lambda: "Darwin")
     seen = []
 
     def read(name, service):
@@ -113,7 +115,7 @@ def test_macos_keychain_uses_freebuffs_service_and_credential_path(monkeypatch, 
 
     monkeypatch.setattr(CredentialStore, "_fallback_read", staticmethod(read))
     path = tmp_path / "credentials.json"
-    assert ab._freebuff_keychain_token(path) == "stored-token"
+    assert backend_probes._freebuff_keychain_token(path) == "stored-token"
     assert seen == [("freebuff-cli", str(path))]
 
 
@@ -121,7 +123,7 @@ def test_macos_keychain_uses_freebuffs_service_and_credential_path(monkeypatch, 
 def test_linux_secure_store_uses_buns_attributes_and_closes_the_connection(
     monkeypatch, tmp_path, locked
 ):
-    monkeypatch.setattr(ab.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(backend_probes.platform, "system", lambda: "Linux")
     seen = []
     connection = SimpleNamespace(close=lambda: seen.append("closed"))
     item = SimpleNamespace(is_locked=lambda: locked, get_secret=lambda: b"stored-token")
@@ -137,19 +139,19 @@ def test_linux_secure_store_uses_buns_attributes_and_closes_the_connection(
         SimpleNamespace(dbus_init=lambda: connection, search_items=search),
     )
     path = tmp_path / "credentials.json"
-    assert ab._freebuff_keychain_token(path) == ("" if locked else "stored-token")
+    assert backend_probes._freebuff_keychain_token(path) == ("" if locked else "stored-token")
     assert seen == [{"service": "freebuff-cli", "account": str(path)}, "closed"]
 
 
 def test_a_missing_secure_token_does_not_claim_a_signed_in_account(monkeypatch, tmp_path):
-    monkeypatch.setattr(ab.Path, "home", classmethod(lambda _: tmp_path))
-    monkeypatch.setattr(ab, "_freebuff_keychain_token", lambda _: "")
+    monkeypatch.setattr(backend_probes.Path, "home", classmethod(lambda _: tmp_path))
+    monkeypatch.setattr(backend_probes, "_freebuff_keychain_token", lambda _: "")
     path = tmp_path / ".config/manicode/credentials.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps({"default": {"email": "test@example.com", "tokenStore": "keychain"}})
     )
-    assert not ab._freebuff_signed_in(ab._freebuff_account())
+    assert not backend_probes._freebuff_signed_in(backend_probes._freebuff_account())
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le"])
@@ -177,15 +179,15 @@ def test_windows_reader_preserves_bun_utf8_and_chat_utf16_credentials(monkeypatc
 
 def test_cyclic_model_aliases_are_ignored():
     try:
-        result = ab._resolve_minified_string("a=b;b=a;", "a")
+        result = backend_probes._resolve_minified_string("a=b;b=a;", "a")
     except RecursionError:
         pytest.fail("cyclic model aliases recurse forever", pytrace=False)
     assert result == ""
 
 
 def test_invalid_settings_are_preserved(monkeypatch, tmp_path):
-    monkeypatch.setattr(ab.Path, "home", classmethod(lambda _: tmp_path))
-    monkeypatch.setattr(ab, "_freebuff_choice_path", lambda: tmp_path / "choice.json")
+    monkeypatch.setattr(backend_probes.Path, "home", classmethod(lambda _: tmp_path))
+    monkeypatch.setattr(backend_probes, "_freebuff_choice_path", lambda: tmp_path / "choice.json")
     settings = tmp_path / ".config/manicode/settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text('{"importantSetting":', encoding="utf-8")
@@ -198,9 +200,9 @@ def test_invalid_settings_are_preserved(monkeypatch, tmp_path):
 def test_choice_write_failure_is_reported(monkeypatch, tmp_path):
     parent = tmp_path / "file"
     parent.write_text("not a directory")
-    monkeypatch.setattr(ab, "_freebuff_choice_path", lambda: parent / "choice.json")
+    monkeypatch.setattr(backend_probes, "_freebuff_choice_path", lambda: parent / "choice.json")
     with pytest.raises(OSError):
-        ab._write_freebuff_choice("a/b")
+        backend_probes._write_freebuff_choice("a/b")
 
 
 def test_repeating_prompt_words_in_the_answer_does_not_move_the_boundary():
@@ -243,7 +245,7 @@ def test_global_history_includes_the_unbucketed_chats(monkeypatch, tmp_path):
 
 def test_missing_cli_session_fails_without_starting_freebuff(monkeypatch):
     failures = []
-    worker = _worker(callbacks=TurnCallbacks(on_failed=failures.append))
+    worker = _worker(on_failed=failures.append)
     worker._session_id = "desktop-only-id"
     monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _: "freebuff")
     monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _: None)
@@ -397,7 +399,7 @@ def test_chat_discovery_uses_the_terminal_process(monkeypatch, tmp_path):
 
 
 def test_a_chat_in_another_project_cannot_be_resumed(monkeypatch, tmp_path):
-    monkeypatch.setattr(ab.Path, "home", classmethod(lambda _: tmp_path))
+    monkeypatch.setattr(backend_probes.Path, "home", classmethod(lambda _: tmp_path))
     cwd = tmp_path / "current"
     cwd.mkdir()
     (cwd / ".git").mkdir()
@@ -422,11 +424,13 @@ def test_a_chat_in_another_project_cannot_be_resumed(monkeypatch, tmp_path):
 def test_restarting_a_prewarm_handles_the_replacement_model_picker(monkeypatch):
     state = {"generation": 0, "picked": False, "sent": False, "enters": 0, "reads": 0}
     completed, failed = [], []
-    worker = _worker(callbacks=TurnCallbacks(on_complete=completed.append, on_failed=failed.append))
+    worker = _worker(on_complete=completed.append, on_failed=failed.append)
     worker._model = "a/selected"
     clock = iter(range(10000))
     monkeypatch.setattr(
-        ab, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+        freebuff_worker,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None),
     )
     monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _: "freebuff")
     monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _: None)

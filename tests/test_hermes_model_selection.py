@@ -31,7 +31,6 @@ SPDX-License-Identifier: MIT
 """
 
 from __future__ import annotations
-from backend_registry import TurnCallbacks
 
 import time
 
@@ -45,6 +44,7 @@ from hermes_backend import (
     hermes_model_options,
     split_model_row,
 )
+from backend_registry import TurnCallbacks
 from hermes_worker import HermesWorker
 
 _QUALIFIED_MODEL = "ri.language-model-service..language-model.gpt-5-4"
@@ -63,9 +63,12 @@ def _callbacks() -> dict:
 
 
 def _worker(**overrides) -> HermesWorker:
-    kwargs = _callbacks()
-    kwargs.update(overrides)
-    return HermesWorker("test", None, ".", "default", **kwargs)
+    callbacks = _callbacks()
+    callbacks.update({k: v for k, v in overrides.items() if k.startswith("on_")})
+    extras = {k: v for k, v in overrides.items() if not k.startswith("on_")}
+    return HermesWorker(
+        "test", None, ".", "default", callbacks=TurnCallbacks(**callbacks), **extras
+    )
 
 
 class _CatalogTransport:
@@ -383,11 +386,7 @@ def test_content_free_frames_do_not_pass_for_progress(monkeypatch) -> None:
 
     heard: list[str] = []
     failed: list[str] = []
-    worker = _worker(
-        callbacks=TurnCallbacks(
-            on_activity=lambda _kind, text: heard.append(text), on_failed=failed.append
-        )
-    )
+    worker = _worker(on_activity=lambda _kind, text: heard.append(text), on_failed=failed.append)
     worker._transport = _ChatterTransport()
 
     def give_up() -> None:
@@ -436,7 +435,7 @@ def test_a_frame_that_produces_a_row_does_reset_the_timer(monkeypatch) -> None:
             }
 
     heard: list[str] = []
-    worker = _worker(callbacks=TurnCallbacks(on_activity=lambda _kind, text: heard.append(text)))
+    worker = _worker(on_activity=lambda _kind, text: heard.append(text))
     worker._transport = _WorkingTransport()
 
     # Real steps keep the clock at zero, so nothing here will ever end the
@@ -499,7 +498,9 @@ def _reused(model: str, session_model: str, frames: list[dict]):
     activities: list[tuple[str, str]] = []
     kwargs = _callbacks()
     kwargs["on_activity"] = lambda kind, text: activities.append((kind, text))
-    worker = HermesWorker("test", None, ".", "default", model=model, **kwargs)
+    worker = HermesWorker(
+        "test", None, ".", "default", model=model, callbacks=TurnCallbacks(**kwargs)
+    )
     transport = _ReplyTransport(frames)
     held = HeldConnection()
     held.keep(transport, "live-1", session_model)
