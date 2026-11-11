@@ -64,6 +64,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/py-lint.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

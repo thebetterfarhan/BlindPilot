@@ -18,22 +18,36 @@ pre-commit install --hook-type pre-push
 
 ## Inner loop
 
-Fast check after each edit:
+Each layer runs only what the layer before it can't, so nothing runs twice.
+
+| When | What runs | Cost |
+|---|---|---|
+| After each edit | `ruff format` and `ruff check --fix` on the edited file (a Claude Code hook does this) | under a second |
+| While working | Only the tests the change touches: `python -m pytest -q -W error tests/test_<name>.py` | seconds |
+| On commit | Pre-commit hook: `ruff check`, `ruff format --check`, `mypy` | a few seconds |
+| On push | Pre-push hook: the whole suite, `-n 4 --dist loadfile` | about 3 minutes |
+| On PR and nightly | CI on Windows, macOS and Linux | the only cross-platform check |
+
+Do not run the whole suite by hand before pushing when the pre-push hook is
+installed; that pays for it twice. Run it by hand only where the hooks are not
+installed (a fresh cloud session), and then with the same flags:
+
+```sh
+python -m pytest -q -W error -n 4 --dist loadfile
+```
+
+## Gate
+
+Before a commit or PR, these must exit 0:
 
 ```sh
 python -m ruff check .
 python -m ruff format --check .
-python -m pytest -q -W error
 python -m mypy
+python -m pytest -q -W error -n 4 --dist loadfile
 ```
 
-While working, run the tests the change touches. The pre-push hook runs the
-whole suite; running it here as well pays for it twice.
-
-## Gate
-
-Before a commit or PR, every command above must exit 0. `-W error` is
-intentional: warnings are failures.
+`-W error` is intentional: warnings are failures.
 
 ## wx and the test environment
 
