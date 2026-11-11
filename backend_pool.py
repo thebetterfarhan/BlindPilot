@@ -88,6 +88,10 @@ class Adapter(NamedTuple):
     interrupt: Callable[[object, float], bool]
     stop: Callable[[object], None]
     busy: Callable[[object], bool]
+    # Ends the exact root this adapter launched, at once and without a grace
+    # period, but only after checking it still owns it. None means the backend
+    # cannot verify ownership, so a forced drop leaves the process alone.
+    force_stop: Optional[Callable[[object], None]] = None
 
 
 class HeldProcess:
@@ -157,6 +161,20 @@ class HeldProcess:
         except Exception:
             # Nothing above this can act on a failure to stop, and raising
             # here would abandon the rest of a teardown sweep.
+            pass
+
+    def force_stop(self) -> None:
+        """End an owned process now, when a stop has run out of time.
+
+        Does nothing when the adapter cannot verify ownership: leaving a
+        process running costs one process, ending the wrong one costs more.
+        """
+        force = self._adapter.force_stop
+        if force is None:
+            return
+        try:
+            force(self.handle)
+        except Exception:
             pass
 
     def touch(self) -> None:
@@ -237,6 +255,9 @@ class BackendPool:
         # See `drop_when_idle`.
         self._waited_for: set[tuple] = set()
         self._closing = False
+        # What `drop_all` took out of the registry and is still stopping, so a
+        # forced drop can reach a process whose stop never returned.
+        self._dropping: list[HeldProcess] = []
         # Told the backend name of each process let go, and why, so the
         # window can say what the next prompt in that tab is waiting for. Set
         # by the window; the pool itself must not import wx or speak.
@@ -465,6 +486,7 @@ class BackendPool:
             for slot in list(self._per_panel.values()):
                 everything.extend(slot.values())
                 slot.clear()
+            self._dropping.extend(everything)
         for held in everything:
             # One backend that throws on the way down must not strand the
             # rest; HeldProcess.stop already swallows, this is belt and braces.
@@ -477,6 +499,19 @@ class BackendPool:
             for worker in stopping:
                 worker.join()
         self._stop_strays()
+
+    def force_drop_owned(self) -> None:
+        """Force-end every owned process still being stopped, at the shutdown cap.
+
+        Runs from the shutdown worker only, never from a window callback.
+        """
+        with self._lock:
+            reachable = list(self._dropping)
+            reachable.extend(self._unstopped)
+            for slot in [self._shared, *self._per_panel.values()]:
+                reachable.extend(slot.values())
+        for held in reachable:
+            held.force_stop()
 
     def _stop_strays(self) -> None:
         """Stop anything a drop handed on that no worker has stopped yet.
@@ -594,6 +629,13 @@ def stop_all_held_processes() -> None:
     running = _pool
     if running is not None:
         running.drop_all()
+
+
+def force_drop_all_owned() -> None:
+    """Force the pool's owned processes down, at the shutdown cap."""
+    running = _pool
+    if running is not None:
+        running.force_drop_owned()
 
 
 def start_reaper(interval: float = 60.0) -> threading.Thread:
