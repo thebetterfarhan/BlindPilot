@@ -39,6 +39,7 @@ BASELINE: set[tuple[str, str, str]] = {
     ("test_commandcode_backend.py", "backend_probes", "_probe_backend"),
     ("test_commandcode_input.py", "commandcode_backend", "commandcode_agent_commands"),
     ("test_commandcode_router.py", "commandcode_backend", "commandcode_model_options"),
+    ("test_commandcode_worker.py", "backend_probes", "find_backend_cli"),
     ("test_commandcode_worker.py", "commandcode_worker", "best_free_model"),
     ("test_commandcode_worker.py", "commandcode_worker", "end_process_group"),
     ("test_commandcode_worker.py", "commandcode_worker", "find_backend_cli"),

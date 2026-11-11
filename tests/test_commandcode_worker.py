@@ -194,6 +194,7 @@ def test_auto_route_does_not_probe_slash_commands(monkeypatch, worker_env):
 
 
 def test_cancel_during_auto_probe_prevents_command_code_launch(monkeypatch, worker_env):
+    import backend_probes
     import commandcode_backend
     import commandcode_router
 
@@ -226,9 +227,11 @@ def test_cancel_during_auto_probe_prevents_command_code_launch(monkeypatch, work
             return -9
 
     probe = HeldProbe()
-    monkeypatch.setattr(
-        commandcode_backend.agent_backends, "find_backend_cli", lambda _id: "command-code"
-    )
+    # The auto-route probe resolves the CLI through the worker's own copy and
+    # through backend_probes (the backend's call-time lookup); patch both so the
+    # --list-models probe launches instead of hunting for a real binary.
+    monkeypatch.setattr(commandcode_worker, "find_backend_cli", lambda _id: "command-code")
+    monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _id: "command-code")
     monkeypatch.setattr(commandcode_backend, "commandcode_config", dict)
     monkeypatch.setattr(commandcode_router, "price_catalog", dict)
 
