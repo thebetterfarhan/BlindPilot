@@ -7,6 +7,7 @@ adapter stops reading what the CLIs actually say.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import stat
@@ -464,7 +465,9 @@ def test_a_whole_gemini_turn_runs_on_its_own_sign_in(monkeypatch, tmp_path, home
     )
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     # An agent turn never carries a key BlindPilot chose; the CLI signs itself in.
     assert "GEMINI_API_KEY" not in worker._env(cli)
     worker.start()
@@ -481,7 +484,9 @@ def test_a_signed_out_gemini_turn_says_how_to_sign_in(monkeypatch, tmp_path, hom
     cli = _fake_cli(tmp_path, "gemini", [], exit_code=41)
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.failed and "Sign in with your Google account" in recorder.failed[0]
@@ -492,7 +497,9 @@ def test_a_gemini_crash_is_reported_with_its_reason(monkeypatch, tmp_path, home)
     cli = _fake_cli(tmp_path, "gemini", [{"type": "init", "session_id": "s"}], exit_code=1)
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = GeminiWorker("Say hi", None, str(tmp_path), "default", **recorder.callbacks())
+    worker = GeminiWorker(
+        "Say hi", None, str(tmp_path), "default", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.completed == []
@@ -573,7 +580,9 @@ def test_a_whole_antigravity_turn_sends_the_prompt_as_ndjson(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(google_worker, "find_backend_cli", lambda _backend: cli)
     recorder = Recorder()
-    worker = AntigravityWorker("Say hi", "c-0", str(tmp_path), "plan", **recorder.callbacks())
+    worker = AntigravityWorker(
+        "Say hi", "c-0", str(tmp_path), "plan", callbacks=TurnCallbacks(**recorder.callbacks())
+    )
     worker.start()
     worker.join(timeout=30)
     assert recorder.completed == ["Hi."]

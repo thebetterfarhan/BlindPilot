@@ -8,6 +8,7 @@ interrupt does not reach the agents it started, so each worker has to name
 them itself.
 """
 
+from backend_registry import TurnCallbacks
 from types import SimpleNamespace
 
 import agent_backends
@@ -113,7 +114,9 @@ def test_agents_that_outlive_their_turn_stay_running_when_it_ends():
 def _claude(reports):
     import claude_worker
 
-    worker = claude_worker.ClaudeWorker("hi", None, ".", "default", **_callbacks(reports))
+    worker = claude_worker.ClaudeWorker(
+        "hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(reports))
+    )
     session = SimpleNamespace(agent_tasks={}, agent_calls=set(), background_agents=set())
     return worker, session
 
@@ -227,7 +230,7 @@ def test_claude_stop_ends_each_running_agent_before_the_turn():
 def _muse(reports):
     from muse_worker import MuseWorker
 
-    worker = MuseWorker("hi", None, ".", "default", **_callbacks(reports))
+    worker = MuseWorker("hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(reports)))
     worker._live_session = "sess"
     return worker
 
@@ -326,7 +329,9 @@ def test_hermes_relayed_child_events_become_an_agent():
     from hermes_worker import HermesWorker
 
     reports = []
-    worker = HermesWorker("hi", None, ".", "default", **_callbacks(reports))
+    worker = HermesWorker(
+        "hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(reports))
+    )
     payload = {"subagent_id": "sub-1", "goal": "Research A"}
     worker._subagent_event("start", {**payload, "text": "Research A"})
     worker._subagent_event("tool", {**payload, "tool_name": "web_search", "text": "rivers"})
@@ -341,7 +346,7 @@ def test_hermes_relayed_child_events_become_an_agent():
 def test_hermes_stop_interrupts_each_running_child_by_name():
     from hermes_worker import HermesWorker
 
-    worker = HermesWorker("hi", None, ".", "default", **_callbacks([]))
+    worker = HermesWorker("hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks([])))
     worker._live_session = "live-1"
     worker._subagents = {"sub-1": SUBAGENT_RUNNING, "sub-2": SUBAGENT_COMPLETED}
     sent = []
@@ -358,7 +363,9 @@ def test_hermes_stop_interrupts_each_running_child_by_name():
 
 def test_codex_spawned_agents_are_read_on_this_turns_inbox():
     reports = []
-    worker = agent_backends.CodexWorker("hi", "thr_parent", ".", "default", **_callbacks(reports))
+    worker = agent_backends.CodexWorker(
+        "hi", "thr_parent", ".", "default", callbacks=TurnCallbacks(**_callbacks(reports))
+    )
     attached = []
     worker._server = SimpleNamespace(attach=lambda thread, inbox: attached.append(thread))
     worker._inbox = object()
@@ -399,7 +406,7 @@ def test_codex_spawned_agents_are_read_on_this_turns_inbox():
 
 def test_codex_child_approvals_are_answered_not_declined_unread():
     worker = agent_backends.CodexWorker(
-        "hi", "thr_parent", ".", "bypassPermissions", **_callbacks([])
+        "hi", "thr_parent", ".", "bypassPermissions", callbacks=TurnCallbacks(**_callbacks([]))
     )
     sent = []
     worker._send = lambda message: sent.append(message) or True
@@ -414,7 +421,9 @@ def test_codex_child_approvals_are_answered_not_declined_unread():
 
 
 def test_codex_stop_interrupts_each_running_agent():
-    worker = agent_backends.CodexWorker("hi", "thr_parent", ".", "default", **_callbacks([]))
+    worker = agent_backends.CodexWorker(
+        "hi", "thr_parent", ".", "default", callbacks=TurnCallbacks(**_callbacks([]))
+    )
     worker._children = {"a": SUBAGENT_RUNNING, "b": SUBAGENT_COMPLETED}
     worker._child_turns = {"a": "turn_a", "b": "turn_b"}
     sent = []
@@ -431,7 +440,7 @@ def test_codex_stop_interrupts_each_running_agent():
 def test_opencode_task_children_are_followed_and_kept_out_of_the_answer():
     reports = []
     worker = agent_backends.OpencodeWorker(
-        "hi", "ses_parent", ".", "default", **_callbacks(reports)
+        "hi", "ses_parent", ".", "default", callbacks=TurnCallbacks(**_callbacks(reports))
     )
     worker._part(
         {
@@ -479,7 +488,9 @@ def test_command_code_nested_agent_runs_become_an_agent():
     from commandcode_worker import CommandcodeWorker
 
     reports = []
-    worker = CommandcodeWorker("hi", None, ".", "default", **_callbacks(reports))
+    worker = CommandcodeWorker(
+        "hi", None, ".", "default", callbacks=TurnCallbacks(**_callbacks(reports))
+    )
     worker._handle_event(
         {
             "type": "tool_queued",

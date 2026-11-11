@@ -6,6 +6,7 @@ release.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import threading
@@ -228,7 +229,7 @@ def test_the_worker_keeps_threadings_started_event():
 
 def test_notify_started_fires_on_started_exactly_once():
     fired: list[str] = []
-    worker, _said = _worker(on_started=lambda: fired.append("started"))
+    worker, _said = _worker(callbacks=TurnCallbacks(on_started=lambda: fired.append("started")))
     worker._notify_started()
     worker._notify_started()
     assert fired == ["started"]

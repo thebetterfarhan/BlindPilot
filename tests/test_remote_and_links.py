@@ -8,6 +8,7 @@ Modelled on The Chat Place (TheIdeaPlace/AIChat).
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import pytest
 
@@ -67,13 +68,15 @@ def _worker(remote):
         None,
         ".",
         "bypassPermissions",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda *_a: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _t: None,
-        on_done=lambda: None,
         remote_control=remote,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda *_a: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _t: None,
+            on_done=lambda: None,
+        ),
     )
     reports: list = []
     worker.on_remote = reports.append

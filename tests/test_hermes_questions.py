@@ -11,6 +11,7 @@ ever looked for ``question``.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 
@@ -66,13 +67,15 @@ def _worker(activities, sent, questions_asked, answers):
         None,
         "C:/Users/admin",
         "default",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: activities.append((kind, text)),
-        on_complete=lambda _txt: None,
-        on_failed=lambda _msg: None,
-        on_done=lambda: None,
-        on_question=ask,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: activities.append((kind, text)),
+            on_complete=lambda _txt: None,
+            on_failed=lambda _msg: None,
+            on_done=lambda: None,
+            on_question=ask,
+        ),
     )
     transport = _RecordingTransport()
     transport.sent = sent
@@ -320,12 +323,14 @@ def test_no_question_callback_still_releases_the_turn():
         None,
         "C:/Users/admin",
         "default",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _m: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _m: None,
+            on_done=lambda: None,
+        ),
     )
 
     transport = _RecordingTransport()

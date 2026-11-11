@@ -16,6 +16,7 @@ and each was measured against a live Hermes gateway before being written:
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import base64
 
@@ -114,7 +115,12 @@ def test_the_upload_carries_the_bare_name_not_the_client_path(tmp_path):
     sample = tmp_path / "stacje.xlsx"
     sample.write_bytes(b"payload")
     worker = HermesWorker(
-        "read it", None, ".", "default", attachments=[str(sample)], **_callbacks()
+        "read it",
+        None,
+        ".",
+        "default",
+        attachments=[str(sample)],
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     worker._transport = _FakeTransport(
         [_attach_reply(101, "/home/u/.hermes/attachments/stacje.xlsx")]
@@ -138,7 +144,9 @@ def test_the_file_bytes_are_what_is_sent_not_the_path(tmp_path):
     sample = tmp_path / "raport.txt"
     content = b"sekretny znacznik: 7731\n"
     sample.write_bytes(content)
-    worker = HermesWorker("", None, ".", "default", attachments=[str(sample)], **_callbacks())
+    worker = HermesWorker(
+        "", None, ".", "default", attachments=[str(sample)], callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._transport = _FakeTransport([_attach_reply(101, "/gw/attachments/raport.txt")])
     worker._request_id = 100
     worker._live_session = "live-1"
@@ -173,7 +181,12 @@ def test_every_attachment_is_sent_not_only_the_first(tmp_path):
     one.write_bytes(b"1")
     two.write_bytes(b"22")
     worker = HermesWorker(
-        "", None, ".", "default", attachments=[str(one), str(two)], **_callbacks()
+        "",
+        None,
+        ".",
+        "default",
+        attachments=[str(one), str(two)],
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     worker._transport = _FakeTransport(
         [_attach_reply(101, "/gw/a/one.txt"), _attach_reply(102, "/gw/a/two.txt")]
@@ -200,7 +213,12 @@ def test_the_prompt_points_at_the_path_hermes_stored_the_file_at(tmp_path):
     sample = tmp_path / "raport.txt"
     sample.write_bytes(b"x")
     worker = HermesWorker(
-        "Summarise this", None, ".", "default", attachments=[str(sample)], **_callbacks()
+        "Summarise this",
+        None,
+        ".",
+        "default",
+        attachments=[str(sample)],
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     text = worker._prompt_with_attachments([("raport.txt", "/gw/attachments/raport.txt")])
 
@@ -213,7 +231,9 @@ def test_the_prompt_points_at_the_path_hermes_stored_the_file_at(tmp_path):
 
 def test_a_prompt_less_send_still_asks_for_the_file_to_be_read(tmp_path):
     """Attaching with no typed question is a legitimate send in BlindPilot."""
-    worker = HermesWorker("", None, ".", "default", attachments=["/x/a.txt"], **_callbacks())
+    worker = HermesWorker(
+        "", None, ".", "default", attachments=["/x/a.txt"], callbacks=TurnCallbacks(**_callbacks())
+    )
     text = worker._prompt_with_attachments([("a.txt", "/gw/a/a.txt")])
     assert text.strip()
     assert "/gw/a/a.txt" in text
@@ -225,7 +245,12 @@ def test_the_turn_submits_the_rewritten_prompt_not_the_original(tmp_path):
     sample = tmp_path / "dane.csv"
     sample.write_bytes(b"a,b\n")
     worker = HermesWorker(
-        "What is in it?", None, ".", "default", attachments=[str(sample)], **_callbacks()
+        "What is in it?",
+        None,
+        ".",
+        "default",
+        attachments=[str(sample)],
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     worker._transport = _FakeTransport(
         [
@@ -257,7 +282,14 @@ def test_the_upload_happens_before_the_prompt(tmp_path):
     """Order is the contract: Hermes stages the file for the NEXT submit."""
     sample = tmp_path / "x.txt"
     sample.write_bytes(b"x")
-    worker = HermesWorker("q", None, ".", "default", attachments=[str(sample)], **_callbacks())
+    worker = HermesWorker(
+        "q",
+        None,
+        ".",
+        "default",
+        attachments=[str(sample)],
+        callbacks=TurnCallbacks(**_callbacks()),
+    )
     worker._transport = _FakeTransport(
         [
             _attach_reply(101, "/gw/a/x.txt"),
@@ -283,7 +315,9 @@ def test_the_upload_happens_before_the_prompt(tmp_path):
 
 def test_a_turn_without_attachments_sends_exactly_what_it_used_to(tmp_path):
     """The old path must not gain a file.attach frame or a rewritten prompt."""
-    worker = HermesWorker("plain question", None, ".", "default", **_callbacks())
+    worker = HermesWorker(
+        "plain question", None, ".", "default", callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._transport = _FakeTransport(
         [
             {"jsonrpc": "2.0", "id": 101, "result": {"status": "streaming"}},
@@ -314,7 +348,9 @@ def test_a_missing_file_is_refused_by_name_before_the_turn_starts(tmp_path):
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
     missing = tmp_path / "nie_ma.txt"
-    worker = HermesWorker("q", None, ".", "default", attachments=[str(missing)], **callbacks)
+    worker = HermesWorker(
+        "q", None, ".", "default", attachments=[str(missing)], callbacks=TurnCallbacks(**callbacks)
+    )
     worker._transport = _FakeTransport()
     worker._request_id = 100
     worker._live_session = "live-1"
@@ -334,7 +370,12 @@ def test_the_turn_does_not_run_when_an_attachment_cannot_be_sent(tmp_path):
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
     worker = HermesWorker(
-        "q", None, ".", "default", attachments=[str(tmp_path / "absent.txt")], **callbacks
+        "q",
+        None,
+        ".",
+        "default",
+        attachments=[str(tmp_path / "absent.txt")],
+        callbacks=TurnCallbacks(**callbacks),
     )
     worker._transport = _FakeTransport()
     worker._request_id = 100
@@ -378,7 +419,9 @@ def test_a_gateway_refusal_is_reported_with_hermes_own_words(tmp_path):
     callbacks["on_failed"] = failed.append
     sample = tmp_path / "a.txt"
     sample.write_bytes(b"x")
-    worker = HermesWorker("q", None, ".", "default", attachments=[str(sample)], **callbacks)
+    worker = HermesWorker(
+        "q", None, ".", "default", attachments=[str(sample)], callbacks=TurnCallbacks(**callbacks)
+    )
     worker._transport = _FakeTransport(
         [{"jsonrpc": "2.0", "id": 101, "error": {"code": 5028, "message": "disk is full"}}]
     )
@@ -396,7 +439,9 @@ def test_an_accepted_upload_with_no_path_is_treated_as_a_failure(tmp_path):
     callbacks["on_failed"] = failed.append
     sample = tmp_path / "a.txt"
     sample.write_bytes(b"x")
-    worker = HermesWorker("q", None, ".", "default", attachments=[str(sample)], **callbacks)
+    worker = HermesWorker(
+        "q", None, ".", "default", attachments=[str(sample)], callbacks=TurnCallbacks(**callbacks)
+    )
     worker._transport = _FakeTransport(
         [{"jsonrpc": "2.0", "id": 101, "result": {"attached": True}}]
     )
@@ -414,7 +459,9 @@ def test_the_user_hears_that_the_file_is_on_its_way(tmp_path):
     callbacks["on_activity"] = lambda kind, text: rows.append((kind, text))
     sample = tmp_path / "raport.xlsx"
     sample.write_bytes(b"0" * 2048)
-    worker = HermesWorker("q", None, ".", "default", attachments=[str(sample)], **callbacks)
+    worker = HermesWorker(
+        "q", None, ".", "default", attachments=[str(sample)], callbacks=TurnCallbacks(**callbacks)
+    )
     worker._transport = _FakeTransport([_attach_reply(101, "/gw/a/raport.xlsx")])
     worker._request_id = 100
     worker._live_session = "live-1"

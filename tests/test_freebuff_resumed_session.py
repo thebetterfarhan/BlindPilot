@@ -17,6 +17,7 @@ prewarm for the next message.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import freebuff_terminal
 import freebuff_worker
@@ -51,12 +52,14 @@ def _worker(turn: _Turn, session_id):
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=turn.sessions.append,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=turn.sessions.append,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
 
 

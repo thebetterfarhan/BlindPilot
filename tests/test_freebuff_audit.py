@@ -1,5 +1,6 @@
 """Regression cases found while auditing the FreeBuff integration."""
 
+from backend_registry import TurnCallbacks
 import ctypes
 import json
 import platform
@@ -242,7 +243,7 @@ def test_global_history_includes_the_unbucketed_chats(monkeypatch, tmp_path):
 
 def test_missing_cli_session_fails_without_starting_freebuff(monkeypatch):
     failures = []
-    worker = _worker(on_failed=failures.append)
+    worker = _worker(callbacks=TurnCallbacks(on_failed=failures.append))
     worker._session_id = "desktop-only-id"
     monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _: "freebuff")
     monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _: None)
@@ -421,7 +422,7 @@ def test_a_chat_in_another_project_cannot_be_resumed(monkeypatch, tmp_path):
 def test_restarting_a_prewarm_handles_the_replacement_model_picker(monkeypatch):
     state = {"generation": 0, "picked": False, "sent": False, "enters": 0, "reads": 0}
     completed, failed = [], []
-    worker = _worker(on_complete=completed.append, on_failed=failed.append)
+    worker = _worker(callbacks=TurnCallbacks(on_complete=completed.append, on_failed=failed.append))
     worker._model = "a/selected"
     clock = iter(range(10000))
     monkeypatch.setattr(

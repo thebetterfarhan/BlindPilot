@@ -33,6 +33,7 @@ optional path on the server, and an empty name still means "let Hermes name it"
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import importlib
 
@@ -56,13 +57,15 @@ def _params(**kwargs) -> dict:
         None,
         "",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _m: None,
-        on_done=lambda: None,
         **kwargs,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _m: None,
+            on_done=lambda: None,
+        ),
     )
     return worker._session_params()
 
@@ -154,12 +157,14 @@ def _ensure_session(asked_for: str, landed: str) -> list[tuple[str, str]]:
         None,
         asked_for,
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: notes.append((kind, text)),
-        on_complete=lambda _t: None,
-        on_failed=lambda msg: notes.append(("failed", msg)),
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: notes.append((kind, text)),
+            on_complete=lambda _t: None,
+            on_failed=lambda msg: notes.append(("failed", msg)),
+            on_done=lambda: None,
+        ),
     )
     worker._transport = _CreateReply(landed)
     assert worker._ensure_session() is True

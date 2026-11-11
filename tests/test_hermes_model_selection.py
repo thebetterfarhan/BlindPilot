@@ -31,6 +31,7 @@ SPDX-License-Identifier: MIT
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import time
 
@@ -383,8 +384,9 @@ def test_content_free_frames_do_not_pass_for_progress(monkeypatch) -> None:
     heard: list[str] = []
     failed: list[str] = []
     worker = _worker(
-        on_activity=lambda _kind, text: heard.append(text),
-        on_failed=failed.append,
+        callbacks=TurnCallbacks(
+            on_activity=lambda _kind, text: heard.append(text), on_failed=failed.append
+        )
     )
     worker._transport = _ChatterTransport()
 
@@ -434,7 +436,7 @@ def test_a_frame_that_produces_a_row_does_reset_the_timer(monkeypatch) -> None:
             }
 
     heard: list[str] = []
-    worker = _worker(on_activity=lambda _kind, text: heard.append(text))
+    worker = _worker(callbacks=TurnCallbacks(on_activity=lambda _kind, text: heard.append(text)))
     worker._transport = _WorkingTransport()
 
     # Real steps keep the clock at zero, so nothing here will ever end the

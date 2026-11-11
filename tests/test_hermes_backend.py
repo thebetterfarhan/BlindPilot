@@ -8,6 +8,7 @@ successful while losing something a screen-reader user needs.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import json
 import subprocess
@@ -69,7 +70,7 @@ class _NullThread:
 def _worker(**overrides) -> HermesWorker:
     callbacks = _callbacks()
     callbacks.update(overrides)
-    return HermesWorker("test", None, ".", "default", **callbacks)
+    return HermesWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
 
 class _FakeTransport:
@@ -563,7 +564,9 @@ def test_compacting_without_a_conversation_is_refused_clearly():
     failed = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
-    worker = HermesWorker("", None, ".", "default", compact=True, **callbacks)
+    worker = HermesWorker(
+        "", None, ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
     worker._do_run()
 
     assert failed and "compact" in failed[0].lower()
@@ -573,7 +576,9 @@ def test_compaction_uses_hermes_own_request_and_says_what_happened():
     completed = []
     callbacks = _callbacks()
     callbacks["on_complete"] = completed.append
-    worker = HermesWorker("", "stored-1", ".", "default", compact=True, **callbacks)
+    worker = HermesWorker(
+        "", "stored-1", ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
     transport = _FakeTransport([{"jsonrpc": "2.0", "id": 101, "result": {}}])
     worker._transport = transport
     worker._live_session = "live-1"
@@ -592,7 +597,7 @@ def test_resuming_asks_hermes_to_reopen_the_stored_conversation():
     callbacks = _callbacks()
     sessions = []
     callbacks["on_session"] = sessions.append
-    worker = HermesWorker("hi", "stored-7", ".", "default", **callbacks)
+    worker = HermesWorker("hi", "stored-7", ".", "default", callbacks=TurnCallbacks(**callbacks))
     transport = _FakeTransport([{"jsonrpc": "2.0", "id": 101, "result": {"session_id": "live-7"}}])
     worker._transport = transport
     worker._request_id = 100
@@ -610,7 +615,7 @@ def test_a_new_conversation_reports_the_id_that_survives_a_restart():
     sessions = []
     callbacks = _callbacks()
     callbacks["on_session"] = sessions.append
-    worker = HermesWorker("hi", None, "/tmp", "default", **callbacks)
+    worker = HermesWorker("hi", None, "/tmp", "default", callbacks=TurnCallbacks(**callbacks))
     transport = _FakeTransport(
         [
             {
@@ -632,7 +637,7 @@ def test_a_session_error_is_surfaced_with_hermes_own_message():
     failed = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
-    worker = HermesWorker("hi", None, "/tmp", "default", **callbacks)
+    worker = HermesWorker("hi", None, "/tmp", "default", callbacks=TurnCallbacks(**callbacks))
     worker._transport = _FakeTransport(
         [{"jsonrpc": "2.0", "id": 101, "error": {"code": 4001, "message": "session not found"}}]
     )
@@ -952,7 +957,7 @@ def test_a_missing_hermes_is_reported_rather_than_crashing(monkeypatch):
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
     monkeypatch.setattr(hermes_worker, "hermes_installed", lambda: False)
-    worker = HermesWorker("hi", None, ".", "default", **callbacks)
+    worker = HermesWorker("hi", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
     assert worker._open_transport() is False
     assert failed and "not installed" in failed[0]
@@ -1564,7 +1569,7 @@ def test_a_remote_url_selects_the_network_transport(monkeypatch):
         "default",
         remote_url="ws://192.168.1.10:9119/api/ws",
         remote_token="secret",
-        **callbacks,
+        callbacks=TurnCallbacks(**callbacks),
     )
 
     assert worker._open_transport() is True
@@ -1591,7 +1596,12 @@ def test_an_unreachable_remote_hermes_says_where_it_tried(monkeypatch):
     callbacks = _callbacks()
     callbacks["on_failed"] = failed.append
     worker = HermesWorker(
-        "hi", None, ".", "default", remote_url="ws://nope:9119/api/ws", **callbacks
+        "hi",
+        None,
+        ".",
+        "default",
+        remote_url="ws://nope:9119/api/ws",
+        callbacks=TurnCallbacks(**callbacks),
     )
 
     assert worker._open_transport() is False

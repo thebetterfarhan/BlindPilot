@@ -796,10 +796,10 @@ class BackendAdapter:
     worker: Callable[[AgentWorkerFactory], AgentWorkerFactory]
 
 
-def _claude_worker(_claude: AgentWorkerFactory) -> AgentWorkerFactory:
-    from claude_backend import ClaudeWorker
-
-    return ClaudeWorker
+def _claude_worker(claude: AgentWorkerFactory) -> AgentWorkerFactory:
+    # Claude is the window's own worker, injected by the caller; the registry
+    # returns it unchanged rather than re-importing a second copy.
+    return claude
 
 
 def _hermes_worker(_claude: AgentWorkerFactory) -> AgentWorkerFactory:

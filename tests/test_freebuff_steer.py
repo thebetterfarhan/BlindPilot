@@ -16,6 +16,7 @@ or not the turn was steered.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import freebuff_terminal
 import freebuff_worker
@@ -61,12 +62,14 @@ def _run(monkeypatch, steer: str) -> _Turn:
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
     state = {"sent": False, "steered": False, "phase": 0}
 
@@ -179,12 +182,14 @@ def _sections(prompt: str, steer: str, screen: str):
         ".",
         "default",
         model="z-ai/glm-5.3-flash",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _kind, _text: None,
-        on_complete=lambda _text: None,
-        on_failed=lambda _text: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _kind, _text: None,
+            on_complete=lambda _text: None,
+            on_failed=lambda _text: None,
+            on_done=lambda: None,
+        ),
     )
     worker._echoes.append(freebuff_worker._freebuff_echo(steer))
     return worker._freebuff_sections(screen)

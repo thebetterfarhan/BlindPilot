@@ -1,6 +1,7 @@
 """Backend-neutral behavior and provider adapter regression tests."""
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import io
 import json
@@ -327,7 +328,7 @@ def test_codex_stream_deltas_become_one_accessible_activity_row():
     events = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: events.append((kind, value))
-    worker = CodexWorker("test", None, ".", "default", **callbacks)
+    worker = CodexWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
     worker._assistant_delta_seen.add("message-1")
     worker._assistant_streams["message-1"] = ["Blind", "Pilot", " ready."]
     worker._assistant_parts.extend(["Blind", "Pilot", " ready."])
@@ -498,7 +499,7 @@ def test_freebuff_screen_parser_returns_reasoning_and_clean_answer():
         None,
         ".",
         "default",
-        **_callbacks(),
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     screen = """
 Reply with exactly: BlindPilot FreeBuff adapter ready.
@@ -534,7 +535,7 @@ def test_freebuff_reads_the_answer_as_the_terminal_paints_it():
     events = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: events.append((kind, value))
-    worker = FreebuffWorker("test", None, ".", "default", **callbacks)
+    worker = FreebuffWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
     spoken = worker._emit_screen_delta("assistant", "", "The sky is blue. Sunlight is")
     assert events == [("assistant", "The sky is blue.")]
@@ -933,7 +934,7 @@ def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("test", None, ".", "default", **callbacks)
+    worker = CodexWorker("test", None, ".", "default", callbacks=TurnCallbacks(**callbacks))
 
     worker._do_run()
 
@@ -993,7 +994,9 @@ def test_freebuff_reports_a_terminal_that_closes_before_it_is_ready(monkeypatch)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
     def fake_spawn(_args):
         worker._stream_ended.set()
@@ -1024,7 +1027,9 @@ def test_freebuff_gives_up_on_a_terminal_that_starts_and_then_paints_nothing(mon
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
     monkeypatch.setattr(freebuff_worker, "find_backend_cli", lambda _backend: "freebuff")
     monkeypatch.setattr(freebuff_worker, "set_freebuff_model", lambda _model: None)
@@ -1133,7 +1138,9 @@ def test_codex_compaction_is_a_request_of_its_own_not_a_message(monkeypatch):
     callbacks = _callbacks()
     callbacks["on_complete"] = completed.append
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("/compact", "thread-1", ".", "default", compact=True, **callbacks)
+    worker = CodexWorker(
+        "/compact", "thread-1", ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
 
     worker._do_run()
 
@@ -1151,7 +1158,9 @@ def test_codex_will_not_compact_a_conversation_that_has_not_started(monkeypatch)
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = CodexWorker("/compact", None, ".", "default", compact=True, **callbacks)
+    worker = CodexWorker(
+        "/compact", None, ".", "default", compact=True, callbacks=TurnCallbacks(**callbacks)
+    )
 
     worker._do_run()
 
@@ -1260,7 +1269,7 @@ def _opencode_turn(events: list[dict], monkeypatch, **kwargs) -> tuple[dict, obj
         kwargs.pop("cwd", "/work"),
         kwargs.pop("permission_mode", "default"),
         **kwargs,
-        **callbacks,
+        callbacks=TurnCallbacks(**callbacks),
     )
     worker._do_run()
     return seen, server
@@ -1287,7 +1296,7 @@ def test_opencode_event_handler_does_not_collide_with_python_313_thread_handle(m
     callbacks = _callbacks()
     completed: list[str] = []
     callbacks["on_complete"] = completed.append
-    worker = OpencodeWorker("hello", None, "/work", "default", **callbacks)
+    worker = OpencodeWorker("hello", None, "/work", "default", callbacks=TurnCallbacks(**callbacks))
     # Reproduce the attribute Python 3.13 adds even when this test is running on
     # an older interpreter. Event dispatch must not try to call it as a method.
     worker._handle = object()
@@ -1470,7 +1479,7 @@ def test_opencode_says_so_when_it_cannot_answer_a_permission_request(monkeypatch
     activity: list[tuple[str, str]] = []
     callbacks = _callbacks()
     callbacks["on_activity"] = lambda kind, value: activity.append((kind, value))
-    OpencodeWorker("hi", None, "/work", "auto", **callbacks)._do_run()
+    OpencodeWorker("hi", None, "/work", "auto", callbacks=TurnCallbacks(**callbacks))._do_run()
 
     assert any("Could not answer a permission request" in text for _kind, text in activity)
 
@@ -1560,8 +1569,7 @@ def test_opencode_refused_history_after_a_question_is_repaired_and_resent(monkey
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **callbacks),
     )._do_run()
 
     # The poisoned question step and the empty step it died on are deleted;
@@ -1633,8 +1641,7 @@ def test_opencode_a_second_refusal_is_reported_not_looped(monkeypatch):
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **callbacks),
     )._do_run()
 
     deleted = [path for method, path, _b in server.calls if method == "DELETE"]
@@ -1668,8 +1675,7 @@ def test_opencode_a_question_left_unanswered_never_triggers_the_repair(monkeypat
         "ses_test",
         "/work",
         "default",
-        on_question=lambda _questions: None,
-        **callbacks,
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **callbacks),
     )._do_run()
 
     assert seen["failed"]
@@ -1718,7 +1724,9 @@ def test_opencode_sends_a_model_only_when_a_tab_chose_one(monkeypatch):
 def test_opencode_steering_adds_to_the_turn_already_running(monkeypatch):
     server = _ScriptedOpencodeServer([])
     monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
-    worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
+    worker = OpencodeWorker(
+        "hello", "ses_test", "/work", "default", callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._server = server
     worker._session_id = "ses_test"
 
@@ -1784,7 +1792,12 @@ def test_opencode_steering_leaves_the_turns_attachments_behind(monkeypatch, tmp_
     server = _ScriptedOpencodeServer([])
     monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
     worker = OpencodeWorker(
-        "hello", "ses_test", "/work", "default", attachments=(str(picture),), **_callbacks()
+        "hello",
+        "ses_test",
+        "/work",
+        "default",
+        attachments=(str(picture),),
+        callbacks=TurnCallbacks(**_callbacks()),
     )
     worker._server = server
     worker._session_id = "ses_test"
@@ -1882,7 +1895,9 @@ def test_opencode_says_patches_subtasks_and_files_once_each(monkeypatch):
 def test_opencode_stop_interrupts_the_turn_and_releases_the_reader(monkeypatch):
     server = _ScriptedOpencodeServer([])
     monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
-    worker = OpencodeWorker("hello", "ses_test", "/work", "default", **_callbacks())
+    worker = OpencodeWorker(
+        "hello", "ses_test", "/work", "default", callbacks=TurnCallbacks(**_callbacks())
+    )
     worker._server = server
     worker._stream = server.open("GET", "/event")
 
@@ -1927,13 +1942,25 @@ def test_opencode_never_sends_an_effort_the_chosen_model_does_not_offer(monkeypa
     monkeypatch.setattr(opencode_worker, "opencode_server", lambda: server)
 
     OpencodeWorker(
-        "hi", None, "/work", "default", model="p/m", effort="low", **_callbacks()
+        "hi",
+        None,
+        "/work",
+        "default",
+        model="p/m",
+        effort="low",
+        callbacks=TurnCallbacks(**_callbacks()),
     )._do_run()
     assert "variant" not in server.body("prompt_async")
 
     server.calls.clear()
     OpencodeWorker(
-        "hi", None, "/work", "default", model="p/m", effort="max", **_callbacks()
+        "hi",
+        None,
+        "/work",
+        "default",
+        model="p/m",
+        effort="max",
+        callbacks=TurnCallbacks(**_callbacks()),
     )._do_run()
     assert server.body("prompt_async")["variant"] == "max"
 
@@ -2065,7 +2092,7 @@ def test_opencode_reports_a_command_that_will_not_run_exactly_once(monkeypatch):
     failures: list[str] = []
     callbacks = _callbacks()
     callbacks["on_failed"] = failures.append
-    worker = OpencodeWorker("/init", None, "/work", "default", **callbacks)
+    worker = OpencodeWorker("/init", None, "/work", "default", callbacks=TurnCallbacks(**callbacks))
 
     worker._do_run()
     _wait_for(lambda: bool(failures))
@@ -2091,8 +2118,9 @@ def test_codex_request_user_input_is_answered_by_question_id():
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions) or [["Spaces"]],
-        **callbacks,
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions) or [["Spaces"]], **callbacks
+        ),
     )
     worker._send = lambda message: sent.append(message) or True
 
@@ -2125,7 +2153,11 @@ def test_codex_request_user_input_is_answered_by_question_id():
 def test_codex_question_nobody_answered_still_ends_the_turn():
     sent = []
     worker = CodexWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._send = lambda message: sent.append(message) or True
 
@@ -2145,8 +2177,9 @@ def test_opencode_question_is_replied_to_in_the_order_it_was_asked():
         None,
         ".",
         "default",
-        on_question=lambda _questions: [["Rust"], ["Tests", "Docs"]],
-        **_callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda _questions: [["Rust"], ["Tests", "Docs"]], **_callbacks()
+        ),
     )
     worker._server = object()
     worker._session_id = "ses_1"
@@ -2187,7 +2220,11 @@ def test_opencode_question_is_replied_to_in_the_order_it_was_asked():
 def test_opencode_question_nobody_answered_is_rejected_not_left_open():
     posted = []
     worker = OpencodeWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._server = object()
     worker._session_id = "ses_1"
@@ -2262,7 +2299,11 @@ def test_freebuff_checkboxes_mean_the_question_takes_several_answers():
 def test_freebuff_answers_a_question_with_the_keys_its_box_understands():
     keys = []
     worker = FreebuffWorker(
-        "test", None, ".", "default", on_question=lambda _questions: [["Spaces"]], **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: [["Spaces"]], **_callbacks()),
     )
     worker._write = lambda text: keys.append(text) or True
 
@@ -2276,7 +2317,7 @@ def test_freebuff_answers_a_question_with_the_keys_its_box_understands():
 
 def test_freebuff_typed_answer_walks_past_the_options_to_its_own_entry():
     keys = []
-    worker = FreebuffWorker("test", None, ".", "default", **_callbacks())
+    worker = FreebuffWorker("test", None, ".", "default", callbacks=TurnCallbacks(**_callbacks()))
     worker._write = lambda text: keys.append(text) or True
 
     _total, _index, question = freebuff_worker._freebuff_open_question(FREEBUFF_QUESTION_SCREEN)
@@ -2291,7 +2332,11 @@ def test_freebuff_typed_answer_walks_past_the_options_to_its_own_entry():
 def test_freebuff_a_question_nobody_answered_closes_the_box():
     keys = []
     worker = FreebuffWorker(
-        "test", None, ".", "default", on_question=lambda _questions: None, **_callbacks()
+        "test",
+        None,
+        ".",
+        "default",
+        callbacks=TurnCallbacks(on_question=lambda _questions: None, **_callbacks()),
     )
     worker._write = lambda text: keys.append(text) or True
 
@@ -2308,8 +2353,10 @@ def test_freebuff_stops_asking_once_the_box_stops_changing():
         None,
         ".",
         "default",
-        on_question=lambda questions: asked.append(questions[0].question) or [["Tabs"]],
-        **_callbacks(),
+        callbacks=TurnCallbacks(
+            on_question=lambda questions: asked.append(questions[0].question) or [["Tabs"]],
+            **_callbacks(),
+        ),
     )
     worker._write = lambda _text: True
 

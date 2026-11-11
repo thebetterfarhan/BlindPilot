@@ -9,6 +9,7 @@ Run from the project root:
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 from collections import deque
 import os
@@ -209,12 +210,14 @@ def _run_worker(events, on_activity=None, mode="default"):
             None,
             os.getcwd(),
             mode,
-            on_session=lambda _sid: None,
-            on_started=lambda: None,
-            on_activity=record,
-            on_complete=completed.append,
-            on_failed=lambda msg: completed.append("FAILED: " + msg),
-            on_done=lambda: None,
+            callbacks=TurnCallbacks(
+                on_session=lambda _sid: None,
+                on_started=lambda: None,
+                on_activity=record,
+                on_complete=completed.append,
+                on_failed=lambda msg: completed.append("FAILED: " + msg),
+                on_done=lambda: None,
+            ),
         )
         worker.run()
     finally:
@@ -337,12 +340,14 @@ def test_steer_writes_a_second_message_into_the_running_process():
             None,
             os.getcwd(),
             "default",
-            on_session=lambda _sid: None,
-            on_started=lambda: None,
-            on_activity=steer_when_the_tool_runs,
-            on_complete=lambda _t: None,
-            on_failed=lambda _m: None,
-            on_done=lambda: None,
+            callbacks=TurnCallbacks(
+                on_session=lambda _sid: None,
+                on_started=lambda: None,
+                on_activity=steer_when_the_tool_runs,
+                on_complete=lambda _t: None,
+                on_failed=lambda _m: None,
+                on_done=lambda: None,
+            ),
         )
         running["worker"] = worker
         worker.run()
@@ -366,12 +371,14 @@ def test_steer_is_refused_once_the_run_is_over():
         None,
         os.getcwd(),
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda _k, _t: None,
-        on_complete=lambda _t: None,
-        on_failed=lambda _m: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda _k, _t: None,
+            on_complete=lambda _t: None,
+            on_failed=lambda _m: None,
+            on_done=lambda: None,
+        ),
     )
     # Never started, so there is nothing listening — must refuse, not raise.
     assert worker.steer("too late") is False
@@ -793,13 +800,15 @@ def _run_worker_with_questions(events, answer, mode="bypassPermissions"):
             None,
             os.getcwd(),
             mode,
-            on_session=lambda _sid: None,
-            on_started=lambda: None,
-            on_activity=lambda kind, text: activity.append((kind, text)),
-            on_complete=lambda _text: None,
-            on_failed=lambda _msg: None,
-            on_done=lambda: None,
-            on_question=on_question,
+            callbacks=TurnCallbacks(
+                on_session=lambda _sid: None,
+                on_started=lambda: None,
+                on_activity=lambda kind, text: activity.append((kind, text)),
+                on_complete=lambda _text: None,
+                on_failed=lambda _msg: None,
+                on_done=lambda: None,
+                on_question=on_question,
+            ),
         )
         worker.run()
     finally:

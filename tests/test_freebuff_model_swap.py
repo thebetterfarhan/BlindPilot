@@ -16,6 +16,7 @@ hourly cut-off.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import freebuff_terminal
 import freebuff_worker
@@ -63,12 +64,14 @@ def test_a_model_the_picker_dropped_is_announced_as_a_notice(monkeypatch):
         ".",
         "default",
         model="gone/model-that-freebuff-dropped",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
     state = {"sent": False, "enters": 0, "phase": 0}
 

@@ -11,6 +11,7 @@ reason attached. Each test below pins the feedback that used to be missing.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 import time
@@ -25,12 +26,14 @@ def _worker(activities, failures):
         None,
         "C:/Users/admin",
         "default",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: activities.append((kind, text)),
-        on_complete=lambda _txt: None,
-        on_failed=lambda msg: failures.append(msg),
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: activities.append((kind, text)),
+            on_complete=lambda _txt: None,
+            on_failed=lambda msg: failures.append(msg),
+            on_done=lambda: None,
+        ),
     )
 
 

@@ -16,6 +16,7 @@ SPDX-License-Identifier: MIT
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import inspect
 
@@ -56,13 +57,15 @@ def test_hermes_worker_accepts_every_callback_the_window_passes() -> None:
         None,
         ".",
         "auto",
-        on_session=_noop,
-        on_started=_noop,
-        on_activity=_noop,
-        on_complete=_noop,
-        on_failed=_noop,
-        on_done=_noop,
-        on_question=_noop,
+        callbacks=TurnCallbacks(
+            on_session=_noop,
+            on_started=_noop,
+            on_activity=_noop,
+            on_complete=_noop,
+            on_failed=_noop,
+            on_done=_noop,
+            on_question=_noop,
+        ),
     )
     accepted = set(inspect.signature(HermesWorker.__init__).parameters)
     assert worker is not None

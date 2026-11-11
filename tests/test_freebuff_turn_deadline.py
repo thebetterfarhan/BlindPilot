@@ -17,6 +17,7 @@ what makes it worth reporting rather than leaving.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import freebuff_worker
 from freebuff_worker import FreebuffWorker
@@ -46,12 +47,14 @@ def _run(monkeypatch, screens, seconds=1.0, hold=None):
         None,
         ".",
         "default",
-        on_session=lambda _s: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: turn.activity.append((kind, text)),
-        on_complete=turn.completed.append,
-        on_failed=turn.failures.append,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _s: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: turn.activity.append((kind, text)),
+            on_complete=turn.completed.append,
+            on_failed=turn.failures.append,
+            on_done=lambda: None,
+        ),
     )
     if hold is not None:
         hold["worker"] = worker

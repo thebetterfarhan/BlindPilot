@@ -10,6 +10,7 @@ length. These tests pin the release timing, not just the final text.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 from markdown_rows import SentenceStreamer, release_finished, release_remainder
 from test_claude_stream_resilience import _FakeProc, _drive, _line
@@ -59,12 +60,14 @@ def test_codex_deltas_are_said_before_the_item_completes():
         None,
         ".",
         "default",
-        on_session=lambda _sid: None,
-        on_started=lambda: None,
-        on_activity=lambda kind, text: events.append((kind, text)),
-        on_complete=lambda _text: None,
-        on_failed=lambda _msg: None,
-        on_done=lambda: None,
+        callbacks=TurnCallbacks(
+            on_session=lambda _sid: None,
+            on_started=lambda: None,
+            on_activity=lambda kind, text: events.append((kind, text)),
+            on_complete=lambda _text: None,
+            on_failed=lambda _msg: None,
+            on_done=lambda: None,
+        ),
     )
     worker._agent_delta({"itemId": "m1", "delta": "First sentence. Sec"})
     # The item has not completed, and the first sentence is already out.

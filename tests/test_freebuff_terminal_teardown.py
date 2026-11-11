@@ -8,6 +8,7 @@ turn and one per prewarmed terminal that is thrown away.
 """
 
 from __future__ import annotations
+from backend_registry import TurnCallbacks
 
 import threading
 
@@ -65,7 +66,9 @@ def test_ending_a_turn_gives_back_the_terminal_it_ran_in():
         "on_failed": lambda _value: None,
         "on_done": lambda: None,
     }
-    worker = FreebuffWorker("do the work", None, ".", "default", **callbacks)
+    worker = FreebuffWorker(
+        "do the work", None, ".", "default", callbacks=TurnCallbacks(**callbacks)
+    )
 
     def turn():
         worker._pty = terminal
