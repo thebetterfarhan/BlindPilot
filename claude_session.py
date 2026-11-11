@@ -560,11 +560,20 @@ class ClaudeSession:
     def force_stop(self) -> None:
         """End the exact root now, for a shutdown whose stop ran out of time.
 
-        Does not wait on locks or close pipes, so it cannot hang behind a
-        stuck ``stop``. Harmless after ``stop`` and when called twice: an
+        Takes the state lock only to mark the session stopped, which
+        ``stop`` holds just long enough to do the same, so it cannot hang behind
+        a stuck ``stop``. Harmless after ``stop`` and when called twice: an
         exited root is never signalled by process or group ID.
         """
+        with self._state:
+            self._stopped = True
         end_process_group(self._proc, timeout=FORCE_STOP_WAIT)
+        stdin = self._proc.stdin
+        if stdin is not None:
+            try:
+                stdin.close()
+            except (OSError, ValueError):
+                pass
 
     # ----- stderr -----
     def _drain_stderr(self) -> None:

@@ -1168,10 +1168,16 @@ class CodexServer:
     def force_stop(self) -> None:
         """End the exact root now, for a shutdown whose stop ran out of time.
 
-        Takes no lock and closes no pipe, so it cannot hang behind a stuck
-        ``stop``. Harmless after ``stop`` and when called twice.
+        Never waits on a lock ``stop`` could be holding: ``stop`` calls
+        ``end_process_group`` with none held. Waiting turns are woken and the
+        pipes released afterwards, as ``stop`` does. Harmless after ``stop``
+        and when called twice.
         """
-        process_utils.end_process_group(self.proc, timeout=process_utils.FORCE_STOP_WAIT)
+        try:
+            process_utils.end_process_group(self.proc, timeout=process_utils.FORCE_STOP_WAIT)
+        finally:
+            self._close("")
+            process_utils._close_process_pipes(self.proc)
 
     def stop(self) -> None:
         try:

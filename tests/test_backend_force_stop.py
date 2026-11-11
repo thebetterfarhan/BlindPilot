@@ -37,12 +37,23 @@ def _start_root() -> tuple[subprocess.Popen, int]:
     return proc, int(proc.stdout.readline())
 
 
+def _zombie(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat") as stat:
+            return stat.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return False
+
+
 def _gone(pid: int) -> bool:
+    """Dead, or a zombie waiting on an init that does not reap."""
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
         except OSError:
+            return True
+        if _zombie(pid):
             return True
         time.sleep(0.02)
     return False
@@ -76,7 +87,7 @@ def test_force_stop_ends_the_root_and_its_child_and_twice_is_harmless(backend):
     try:
         started = time.monotonic()
         adapter.force_stop(handle)
-        assert time.monotonic() - started < 2.0
+        assert time.monotonic() - started < 2.0, "inside the force budget"
         assert proc.poll() is not None
         assert _gone(child)
         adapter.force_stop(handle)
@@ -166,3 +177,38 @@ def test_a_refusing_root_cannot_stretch_the_force_budget(backend):
             raise subprocess.TimeoutExpired("x", timeout)
 
     adapter.force_stop(build(_Stubborn()))
+
+
+@posix_only
+def test_the_pool_forced_drop_ends_a_process_whose_stop_is_stuck(backend):
+    import threading
+
+    import backend_pool
+
+    build, adapter = backend
+    proc, child = _start_root()
+    handle = build(proc)
+    stuck = threading.Event()
+    release = threading.Event()
+
+    def hung_stop(h):
+        stuck.set()
+        release.wait(timeout=10)
+
+    pool = backend_pool.BackendPool()
+    held = backend_pool.HeldProcess(handle, adapter._replace(stop=hung_stop))
+    pool.keep(backend_pool.pool_key("codex"), held)
+    dropping = threading.Thread(target=pool.drop_all, daemon=True)
+    dropping.start()
+    try:
+        assert stuck.wait(timeout=2)
+        pool.force_drop_owned()
+        assert proc.poll() is not None
+        assert _gone(child)
+    finally:
+        release.set()
+        dropping.join(timeout=5)
+        proc.kill()
+        proc.wait()
+        if proc.stdout:
+            proc.stdout.close()
