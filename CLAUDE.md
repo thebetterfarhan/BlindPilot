@@ -13,6 +13,13 @@ in cloud sessions too, and this repo is already set up for it (`docs/agents/`). 
 `code-review` runs two subagents at once, so treat it like `reviewer`: only when
 asked or before a risky PR.
 
+## Lessons
+
+Before you finish a session that commits, add one or two lines to
+`docs/agents/lessons.md`, in the same commit or PR, about the setup itself:
+what wasted tokens or time, or what an agent, hook or instruction got wrong.
+Skip it when nothing was learned. Do not log the work itself.
+
 ## Agents and models
 
 The main session runs on Sonnet. Do small edits and short lookups inline;
