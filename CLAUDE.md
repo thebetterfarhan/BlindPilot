@@ -1,3 +1,8 @@
+Caveman mode is on from the start of every session: use the caveman skill for
+chat replies until the user turns it off. Code, commit messages, PR text, docs
+and anything a screen reader user reads inside BlindPilot stay in normal
+English.
+
 @AGENTS.md
 
 ## Agents and models
