@@ -25,15 +25,80 @@ from backend_probes import (  # noqa: F401
 )
 from backend_registry import *  # noqa: F401, F403
 from backend_registry import (  # noqa: F401
-    _CODEX_WORKER_REEXPORTS,
-    _FREEBUFF_TERMINAL_REEXPORTS,
-    _FREEBUFF_WORKER_REEXPORTS,
-    _OPENCODE_WORKER_REEXPORTS,
     _TurnWorker,
     _strip_terminal_noise,
     _tool_use_label,
 )
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Lazy re-exports from the worker modules — public symbols stay importable from
+# here so no caller has to change. Implemented via __getattr__ rather than a
+# module-level import to avoid a circular-import problem: those modules import
+# shared symbols from backend_registry, so loading them at this shim's import
+# time would pull a half-initialised registry in behind them. __getattr__ is
+# only called when a name is not already in the module's namespace, so the lazy
+# load happens the first time a caller reaches for one of these names.
+# ---------------------------------------------------------------------------
+_CODEX_WORKER_REEXPORTS = frozenset(
+    {
+        "PLAN_PROVIDER_ID",
+        "PLAN_TOKEN_REFRESH_MS",
+        "PLAN_TOKEN_TIMEOUT_MS",
+        "AccountDrop",
+        "AccountSwitch",
+        "CodexServer",
+        "CodexWorker",
+        "PendingSwitch",
+        "PlanAccount",
+        "PlanTokenError",
+        "codex_model_options",
+        "codex_plan_account",
+        "codex_plan_args",
+        "codex_pool_key",
+        "codex_question_args",
+        "drop_codex_plan_account",
+        "drop_pending_codex_processes",
+        "forget_codex_plan_account",
+        "pending_codex_plan_account",
+        "plan_token_command",
+        "save_codex_plan_account",
+        "switch_codex_plan_account",
+        "codex_adapter",
+        "auto_review_line",
+    }
+)
+_FREEBUFF_TERMINAL_REEXPORTS = frozenset(
+    {
+        "FreebuffTerminal",
+        "prewarm_freebuff",
+        "discard_freebuff_prewarm",
+        "spawn_hidden_terminal",
+        "end_hidden_terminal",
+    }
+)
+_FREEBUFF_WORKER_REEXPORTS = frozenset({"FreebuffWorker"})
+_OPENCODE_WORKER_REEXPORTS = frozenset(
+    {
+        "OpencodeServer",
+        "OpencodeWorker",
+        "opencode_server",
+        "stop_opencode_server",
+        "opencode_error_text",
+        "opencode_commands",
+        "opencode_model_options",
+        "opencode_default_model",
+        "opencode_split_model",
+        "opencode_model_efforts",
+        "opencode_providers",
+        "opencode_auth_methods",
+        "opencode_connect_api_key",
+        "opencode_disconnect",
+        "opencode_oauth_start",
+        "opencode_oauth_finish",
+    }
+)
 
 
 def __getattr__(name: str) -> Any:

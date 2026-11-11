@@ -18,7 +18,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 import diagnostics
 import questions
@@ -866,101 +866,3 @@ def worker_class(backend: str, claude_worker: AgentWorkerFactory) -> AgentWorker
     if worker_fn is None:
         raise KeyError(f"no worker for {backend_id}")
     return worker_fn(claude_worker)
-
-
-# ---------------------------------------------------------------------------
-# Re-exports from codex_worker — public symbols stay importable from here so
-# no caller has to change. Implemented via __getattr__ rather than a module-
-# level import to avoid a circular-import problem: codex_worker imports shared
-# symbols from this module, so this module must not import from codex_worker at
-# load time. __getattr__ is only called when a name is not already in the
-# module's namespace, so the lazy load happens the first time a caller reaches
-# for one of these names.
-# ---------------------------------------------------------------------------
-_CODEX_WORKER_REEXPORTS = frozenset(
-    {
-        "PLAN_PROVIDER_ID",
-        "PLAN_TOKEN_REFRESH_MS",
-        "PLAN_TOKEN_TIMEOUT_MS",
-        "AccountDrop",
-        "AccountSwitch",
-        "CodexServer",
-        "CodexWorker",
-        "PendingSwitch",
-        "PlanAccount",
-        "PlanTokenError",
-        "codex_model_options",
-        "codex_plan_account",
-        "codex_plan_args",
-        "codex_pool_key",
-        "codex_question_args",
-        "drop_codex_plan_account",
-        "drop_pending_codex_processes",
-        "forget_codex_plan_account",
-        "pending_codex_plan_account",
-        "plan_token_command",
-        "save_codex_plan_account",
-        "switch_codex_plan_account",
-        "codex_adapter",
-        "auto_review_line",
-    }
-)
-
-
-# Re-exports from freebuff_terminal and freebuff_worker, same lazy mechanism.
-_FREEBUFF_TERMINAL_REEXPORTS = frozenset(
-    {
-        "FreebuffTerminal",
-        "prewarm_freebuff",
-        "discard_freebuff_prewarm",
-        "spawn_hidden_terminal",
-        "end_hidden_terminal",
-    }
-)
-_FREEBUFF_WORKER_REEXPORTS = frozenset({"FreebuffWorker"})
-
-
-# Re-exports from opencode_worker, same lazy mechanism. The opencode discovery
-# helpers that stay here (``_opencode_providers``, ``_opencode_account_lines``)
-# are not re-exports; they are defined in this module beside the other
-# backends' status code.
-_OPENCODE_WORKER_REEXPORTS = frozenset(
-    {
-        "OpencodeServer",
-        "OpencodeWorker",
-        "opencode_server",
-        "stop_opencode_server",
-        "opencode_error_text",
-        "opencode_commands",
-        "opencode_model_options",
-        "opencode_default_model",
-        "opencode_split_model",
-        "opencode_model_efforts",
-        "opencode_providers",
-        "opencode_auth_methods",
-        "opencode_connect_api_key",
-        "opencode_disconnect",
-        "opencode_oauth_start",
-        "opencode_oauth_finish",
-    }
-)
-
-
-def __getattr__(name: str) -> Any:
-    if name in _CODEX_WORKER_REEXPORTS:
-        import codex_worker as _cw
-
-        return getattr(_cw, name)
-    if name in _FREEBUFF_TERMINAL_REEXPORTS:
-        import freebuff_terminal as _ft
-
-        return getattr(_ft, name)
-    if name in _FREEBUFF_WORKER_REEXPORTS:
-        import freebuff_worker as _fw
-
-        return getattr(_fw, name)
-    if name in _OPENCODE_WORKER_REEXPORTS:
-        import opencode_worker as _ow
-
-        return getattr(_ow, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
