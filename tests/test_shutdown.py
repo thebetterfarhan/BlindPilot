@@ -79,3 +79,55 @@ def test_a_forced_drop_that_hangs_is_bounded_too():
     worker.join(timeout=1)
     release.set()
     assert result_box == [shutdown.CAP_HIT]
+
+
+def test_finish_marks_the_shutdown_for_its_duration(tmp_path):
+    import shutdown_marker
+
+    seen = []
+    shutdown.finish(
+        cancelling=[],
+        drop=lambda: seen.append(shutdown_marker.is_shutting_down(tmp_path)),
+        force_drop=lambda: None,
+        data_dir=tmp_path,
+        end_process=lambda: None,
+        **FAST,
+    )
+    assert seen == [True]
+    assert not shutdown_marker.is_shutting_down(tmp_path)
+
+
+def test_finish_after_a_clean_shutdown_leaves_no_notice_and_keeps_the_process(tmp_path):
+    import shutdown_notice
+
+    ended = []
+    shutdown.finish(
+        cancelling=[],
+        drop=lambda: None,
+        force_drop=lambda: None,
+        data_dir=tmp_path,
+        end_process=lambda: ended.append(True),
+        **FAST,
+    )
+    assert shutdown_notice.take_notice(tmp_path) is None
+    assert ended == []
+
+
+def test_finish_after_the_cap_leaves_a_notice_and_ends_the_process(tmp_path):
+    import shutdown_marker
+    import shutdown_notice
+
+    release = threading.Event()
+    ended = []
+    shutdown.finish(
+        cancelling=[],
+        drop=release.wait,
+        force_drop=lambda: None,
+        data_dir=tmp_path,
+        end_process=lambda: ended.append(True),
+        **FAST,
+    )
+    release.set()
+    assert shutdown_notice.take_notice(tmp_path) is not None
+    assert not shutdown_marker.is_shutting_down(tmp_path)
+    assert ended == [True]

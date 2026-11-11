@@ -64,6 +64,9 @@ from accessible_ai.storage import preferences
 from accessible_ai.storage.paths import bundle_dir as _mac_bundle_dir
 
 import backend_pool
+import shutdown
+import shutdown_marker
+import shutdown_notice
 from backend_updates import BackendUpdateResult, BackendUpdateService, BackendUpdateState
 from claude_session import _find_claude
 import claude_worker
@@ -17169,12 +17172,17 @@ class MainFrame(wx.Frame):
                 cancelling.append(thread)
 
         def finish_shutdown() -> None:
-            deadline = time.monotonic() + _CANCEL_JOIN_SECONDS
-            for thread in cancelling:
-                thread.join(timeout=max(0.0, deadline - time.monotonic()))
-            # A shared app-server belongs to no single tab. This also waits
-            # for pending per-tab drops without blocking the close callback.
-            backend_pool.stop_all_held_processes()
+            # Bounded by ADR 0005: join cancellations, drop held processes, and
+            # force an owned drop at the cap. A shared app-server belongs to no
+            # single tab, so the pool is dropped here, not per tab.
+            shutdown.finish(
+                cancelling,
+                backend_pool.stop_all_held_processes,
+                backend_pool.force_drop_all_owned,
+                data_dir=blindpilot_data_dir(),
+                end_process=lambda: os._exit(0),
+                join_seconds=_CANCEL_JOIN_SECONDS,
+            )
 
         threading.Thread(target=finish_shutdown, name="backend-shutdown").start()
         # Closing this window is meant to end the process, and wx ends the
@@ -17190,6 +17198,13 @@ class MainFrame(wx.Frame):
         app = wx.GetApp()
         if app is not None:
             wx.CallAfter(app.ExitMainLoop)
+
+
+def _announce_shutdown_notice(frame: Any) -> None:
+    """Say once, after launch, that the last shutdown had to end a backend by force."""
+    words = shutdown_notice.take_notice(blindpilot_data_dir())
+    if words:
+        frame._announce(words)
 
 
 def _bring_to_front() -> None:
@@ -17416,6 +17431,11 @@ def main() -> int:
         # Codex's app server with the first and fights it over all three; starting
         # it again is almost always somebody looking for the window they lost.
         # Startup checks run beside a working copy and are exempt.
+        if not gui_startup_smoke:
+            # A copy still shutting down holds the single-instance claim. Wait
+            # for it, up to the cap, rather than raising a window it no longer
+            # has (ADR 0005).
+            shutdown_marker.wait_for_shutdown(blindpilot_data_dir(), shutdown.CAP_SECONDS)
         instance = (
             None if gui_startup_smoke else wx.SingleInstanceChecker(f"{APP_NAME}-{wx.GetUserId()}")
         )
@@ -17504,6 +17524,7 @@ def main() -> int:
             # An update that failed did so with no window to report to, so its
             # reason is read out here, before anything else competes for attention.
             wx.CallLater(1200, frame.report_failed_update)
+            wx.CallLater(1800, _announce_shutdown_notice, frame)
             if frame.automatic_update_check_enabled():
                 wx.CallLater(5000, frame.check_for_updates_silently)
             # Abandoned downloads are tens of megabytes each.
