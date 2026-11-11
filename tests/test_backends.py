@@ -929,7 +929,11 @@ def test_a_worker_that_fails_to_launch_codex_reports_why(monkeypatch):
         captured.update(kwargs)
         raise OSError("stop here; the launch arguments are what matter")
 
+    # The pool's _start_codex_server reads codex_worker's own find_backend_cli
+    # copy, so patch that too or discovery returns None ("Codex is not
+    # installed") before the launch the test is checking.
     monkeypatch.setattr(backend_probes, "find_backend_cli", lambda _backend: "codex")
+    monkeypatch.setattr(codex_worker, "find_backend_cli", lambda _backend: "codex")
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     failures: list[str] = []
     callbacks = _callbacks()
@@ -2016,7 +2020,11 @@ def test_a_port_taken_before_the_child_binds_is_retried_on_a_fresh_one(monkeypat
     ports = iter([41234, 41235])
     monkeypatch.setattr(agent_backends.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(opencode_worker, "_free_port", lambda: next(ports))
+    # OpencodeServer calls its own copy of subprocess_env; patch that (not just
+    # backend_probes') so its login-shell PATH probe does not run through the
+    # faked Popen and get counted as a launch.
     monkeypatch.setattr(backend_probes, "subprocess_env", lambda _binary: {})
+    monkeypatch.setattr(opencode_worker, "subprocess_env", lambda _binary: {})
 
     server = agent_backends.OpencodeServer("opencode")
 
